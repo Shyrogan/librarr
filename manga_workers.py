@@ -255,7 +255,7 @@ def start_mangadex_download(job, manga_id: str, title: str) -> bool:
         job["error"] = "No CBZ files were created"
         return False
 
-    library_db = job.get("_library_db")
+    from app import library as library_db
 
     for cbz_path in all_cbzs:
         if not os.path.exists(cbz_path):
@@ -268,7 +268,7 @@ def start_mangadex_download(job, manga_id: str, title: str) -> bool:
                 media_type="manga",
                 source="mangadex",
                 source_id=f"mangadex:{manga_id}:{os.path.basename(cbz_path)}",
-                job_id=job.get("_job_id", ""),
+                job_id=job._job_id,
                 library_db=library_db,
             )
         except Exception as e:

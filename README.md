@@ -1,6 +1,6 @@
 # Librarr
 
-Self-hosted book, audiobook, and webnovel search and download manager. Searches multiple sources, downloads via direct HTTP or torrents, and auto-imports into your library.
+Self-hosted book, audiobook, webnovel, and manga/webcomic search and download manager. Searches multiple sources, downloads via direct HTTP or torrents, and auto-imports into your library.
 
 ## Legal & Educational Use
 
@@ -25,21 +25,27 @@ Librarr searches for books across multiple sources simultaneously and downloads 
 | Prowlarr Indexers | Torrent search | Prowlarr |
 | AudioBookBay | Audiobook torrents | None (qBittorrent for download) |
 | Librivox | Public domain audiobooks (MP3) | None |
+| MangaDex | Manga chapter downloads (CBZ per chapter, merged to volume CBZ) | None |
+| Nyaa.si | Manga torrent search | qBittorrent |
+| Anna's Archive (CBZ/CBR) | Direct manga CBZ/CBR download | None |
+| Prowlarr (manga) | Manga torrent search via your indexers | Prowlarr |
 
-After downloading, books are organized into Author/Title folders and auto-imported into your library apps (Calibre-Web, Kavita, and/or Audiobookshelf).
+After downloading, books are organized into Author/Title folders and auto-imported into your library apps (Calibre-Web, Kavita, and/or Audiobookshelf). Manga is organized into `MANGA_ORGANIZED_DIR/{Series}/` and imported into Komga and/or Kavita.
 
 ## Features
 
 - **Multi-source search** — Anna's Archive, Prowlarr/torrent indexers, AudioBookBay, and 7 web novel sites searched in parallel
+- **Manga/webcomic search** — MangaDex, Nyaa.si, Anna's Archive (CBZ/CBR), and Prowlarr manga indexers in a dedicated Manga tab
 - **Smart download strategy** — For web novels: checks Anna's Archive for a pre-made EPUB first, falls back to chapter-by-chapter scraping only if needed
+- **MangaDex chapter downloads** — Downloads all English chapters as individual CBZ files; merges into volume CBZ when volume grouping is available
 - **Link verification** — Validates that Anna's Archive results are actually downloadable before showing them
 - **Post-processing pipeline** — Organize files into Author/Title folders, import into multiple library apps, track everything
-- **Multi-library import** — Calibre-Web (via calibredb), Kavita (API scan), Audiobookshelf (API scan) — enable any combination
+- **Multi-library import** — Calibre-Web (via calibredb), Kavita (API scan), Audiobookshelf (API scan), Komga (API scan) — enable any combination
 - **Library tracking** — SQLite-backed history of every book processed, with duplicate detection across searches
 - **Activity log** — Full event feed of downloads, imports, file moves, and errors
 - **Audiobook support** — Search and download audiobooks via Prowlarr indexers and AudioBookBay
 - **Library browsing** — Browse your ebook and audiobook libraries with cover art directly in the UI
-- **All integrations optional** — Works with zero config (Anna's Archive + web novel search), add integrations as you need them
+- **All integrations optional** — Works with zero config (Anna's Archive + web novel search + MangaDex), add integrations as you need them
 - **Plugin sources** — Add new search sources by dropping a Python file into `sources/` — no core code changes needed
 - **Settings UI** — Configure all integrations from the web interface with connection testing
 - **Persistent downloads** — Download state survives container restarts (SQLite-backed)
@@ -89,7 +95,8 @@ Configuration can be done two ways:
 | **qBittorrent** | Torrent downloads + audiobook downloads | `QB_URL`, `QB_USER`, `QB_PASS` |
 | **Calibre-Web** | Auto-import ebooks via calibredb | `CALIBRE_CONTAINER` |
 | **Audiobookshelf** | Library browsing, audiobook scan + metadata match | `ABS_URL`, `ABS_TOKEN`, `ABS_LIBRARY_ID` |
-| **Kavita** | Ebook import via library scan | `KAVITA_URL`, `KAVITA_API_KEY` |
+| **Kavita** | Ebook and manga import via library scan | `KAVITA_URL`, `KAVITA_API_KEY`, `KAVITA_MANGA_LIBRARY_ID`, `KAVITA_MANGA_LIBRARY_PATH` |
+| **Komga** | Manga import via library scan | `KOMGA_URL`, `KOMGA_USERNAME`, `KOMGA_PASSWORD`, `KOMGA_LIBRARY_ID`, `KOMGA_LIBRARY_PATH` |
 | **lightnovel-crawler** | Web novel chapter scraping to EPUB | `LNCRAWL_CONTAINER` |
 
 ### Minimal Setup (no integrations)
@@ -111,7 +118,15 @@ ABS_EBOOK_LIBRARY_ID=your-ebook-library-id
 CALIBRE_CONTAINER=calibre-web
 KAVITA_URL=http://kavita:5000
 KAVITA_API_KEY=your-opds-api-key
+KAVITA_MANGA_LIBRARY_ID=2
+KAVITA_MANGA_LIBRARY_PATH=/data/media/books/manga
+KOMGA_URL=http://komga:25600
+KOMGA_USERNAME=admin@komga.org
+KOMGA_PASSWORD=yourpassword
+KOMGA_LIBRARY_ID=your-komga-library-id
+KOMGA_LIBRARY_PATH=/data/media/books/manga
 LNCRAWL_CONTAINER=lncrawl
+MANGA_ORGANIZED_DIR=/data/media/books/manga
 ENABLED_TARGETS=calibre,audiobookshelf,kavita
 ```
 
@@ -130,7 +145,25 @@ For audiobook searches:
 2. **Librivox** — Searches 18,000+ free public domain audiobooks, downloads MP3 chapter files directly
 3. **Prowlarr** — Searches your torrent indexers for audiobook category results (if configured)
 
+For manga searches (Manga tab):
+1. **MangaDex** — Searches MangaDex's public API; direct download of all English chapters as per-chapter CBZ files, merged into volume CBZ when volume data is available
+2. **Nyaa.si** — Searches Nyaa's literature/manga category for torrent releases (requires qBittorrent)
+3. **Anna's Archive** — Searches for CBZ/CBR files for direct download
+4. **Prowlarr** — Searches your configured manga indexers (if configured)
+
 Results are filtered to remove junk (suspicious filenames, zero-seeder torrents, irrelevant titles) and sorted with direct downloads first.
+
+## How Manga Download Works (MangaDex)
+
+When you click Download on a MangaDex result:
+
+1. Fetches the full English chapter list from MangaDex API (all chapters, sorted by number)
+2. For each chapter: fetches image server assignment, downloads all page images to a temp dir, zips into `{Series} - Chapter 001.cbz`
+3. Saves chapter CBZs to `MANGA_ORGANIZED_DIR/{Series}/`
+4. Groups chapters by volume number (from MangaDex metadata) — when all chapters in a volume are downloaded, merges them into `{Series} - Volume 01.cbz`
+5. Each CBZ file runs through the pipeline: copied to `KAVITA_MANGA_LIBRARY_PATH/{Series}/` and/or `KOMGA_LIBRARY_PATH/{Series}/`, then triggers library scan in Kavita/Komga
+
+Manga downloaded from Nyaa or Anna's Archive (CBZ/CBR) goes through the same pipeline after the torrent completes or file downloads.
 
 ## How Web Novel Download Works
 
@@ -157,11 +190,13 @@ When you download a web novel, Librarr uses a multi-strategy approach:
 | `/api/sources` | GET | List all loaded sources with metadata |
 | `/api/search?q=...` | GET | Search all sources |
 | `/api/search/audiobooks?q=...` | GET | Search audiobook sources |
+| `/api/search/manga?q=...` | GET | Search manga sources |
 | `/api/download` | POST | Unified download (auto-dispatches by source) |
 | `/api/download/annas` | POST | Download from Anna's Archive |
 | `/api/download/torrent` | POST | Send torrent to qBittorrent |
 | `/api/download/novel` | POST | Download web novel |
 | `/api/download/audiobook` | POST | Download audiobook torrent |
+| `/api/download/manga/torrent` | POST | Send manga torrent to qBittorrent |
 | `/api/downloads` | GET | List active downloads |
 | `/api/library` | GET | Browse ebook library |
 | `/api/library/audiobooks` | GET | Browse audiobook library |
