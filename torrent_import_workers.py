@@ -140,6 +140,42 @@ class TorrentImportWorkers:
         except Exception as e:
             self.logger.error("Audiobook auto-import error: %s", e)
 
+        # ── Manga torrents ─────────────────────────────────────────────────────────
+        try:
+            torrents = self.qb.get_torrents(category=self.config.QB_MANGA_CATEGORY)
+            for t in torrents:
+                if t.get("progress", 0) < 1.0:
+                    continue
+                with self._imported_hashes_lock:
+                    if t["hash"] in self.imported_hashes:
+                        continue
+                    self.imported_hashes.add(t["hash"])
+                save_path = t.get("content_path", t.get("save_path", ""))
+                qb_manga_path = self.config.QB_MANGA_SAVE_PATH.rstrip("/")
+                if qb_manga_path and save_path.startswith(qb_manga_path):
+                    save_path = self.config.MANGA_INCOMING_DIR + save_path[len(qb_manga_path):]
+
+                manga_files = []
+                for ext in ("*.cbz", "*.cbr", "*.zip", "*.pdf"):
+                    if os.path.isdir(save_path):
+                        manga_files.extend(glob.glob(os.path.join(save_path, "**", ext), recursive=True))
+                    elif save_path.lower().endswith(ext[1:]):
+                        manga_files.append(save_path)
+
+                for mf in manga_files:
+                    self.pipeline.run_pipeline(
+                        mf,
+                        title=t.get("name", ""),
+                        media_type="manga",
+                        source="torrent",
+                        source_id=t["hash"],
+                        library_db=self.library,
+                    )
+                self.qb.delete_torrent(t["hash"], delete_files=True)
+                self.logger.info("Removed completed manga torrent: %s", t.get("name", t["hash"]))
+        except Exception as e:
+            self.logger.error("Manga auto-import error: %s", e)
+
         if self.config.AUDIOBOOK_DIR and os.path.isdir(self.config.AUDIOBOOK_DIR):
             try:
                 active_paths = set()

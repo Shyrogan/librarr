@@ -111,6 +111,48 @@ class ProviderSearchService:
                 self.logger.error("Prowlarr audiobook search failed: %s", e)
         return results
 
+    def search_prowlarr_manga(self, query):
+        if not self.config.has_prowlarr():
+            return []
+        results = []
+        seen_hashes = set()
+        searches = [
+            # Category 7020 = Books/Manga, 7030 = Books/Comics, 3000 = E-Books
+            {"query": query, "categories": [7020, 7030], "type": "search", "limit": 50},
+            {"query": f"{query} manga", "type": "search", "limit": 30},
+        ]
+        for params in searches:
+            try:
+                resp = self.requests.get(
+                    f"{self.config.PROWLARR_URL}/api/v1/search",
+                    params=params,
+                    headers={"X-Api-Key": self.config.PROWLARR_API_KEY},
+                    timeout=30,
+                )
+                for item in resp.json():
+                    ih = item.get("infoHash", "")
+                    if ih and ih in seen_hashes:
+                        continue
+                    if ih:
+                        seen_hashes.add(ih)
+                    size = item.get("size", 0)
+                    results.append({
+                        "source": "prowlarr_manga",
+                        "title": item.get("title", ""),
+                        "size": size,
+                        "size_human": self.human_size(size),
+                        "seeders": item.get("seeders", 0),
+                        "leechers": item.get("leechers", 0),
+                        "indexer": item.get("indexer", ""),
+                        "download_url": item.get("downloadUrl", ""),
+                        "magnet_url": item.get("magnetUrl", ""),
+                        "info_hash": ih,
+                        "guid": item.get("guid", ""),
+                    })
+            except Exception as e:
+                self.logger.error("Prowlarr manga search failed: %s", e)
+        return results
+
     def get_abb_response(self, path, params=None, **kwargs):
         for domain in self.abb_domains:
             try:

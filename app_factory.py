@@ -195,6 +195,7 @@ ABB_URL = _provider_search.abb_url
 ABB_TRACKERS = _provider_search.abb_trackers
 search_prowlarr = _provider_search.search_prowlarr
 search_prowlarr_audiobooks = _provider_search.search_prowlarr_audiobooks
+search_prowlarr_manga = _provider_search.search_prowlarr_manga
 _get_abb_response = _provider_search.get_abb_response
 search_audiobookbay = _provider_search.search_audiobookbay
 _resolve_abb_magnet = _provider_search.resolve_abb_magnet

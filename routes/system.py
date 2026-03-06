@@ -129,6 +129,7 @@ def create_blueprint(ctx):
             "lncrawl": config.has_lncrawl(),
             "audiobooks": config.has_audiobooks(),
             "kavita": config.has_kavita(),
+            "komga": config.has_komga(),
             "file_org_enabled": config.FILE_ORG_ENABLED,
             "enabled_targets": list(config.get_enabled_target_names()),
             "auth_enabled": config.has_auth(),

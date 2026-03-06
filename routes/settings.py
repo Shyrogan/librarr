@@ -133,4 +133,30 @@ def create_blueprint(ctx):
         api_key = data.get("api_key", "")
         return jsonify(ctx["test_kavita_connection"](url, api_key))
 
+    @bp.route("/api/test/komga", methods=["POST"])
+    def api_test_komga():
+        import requests as _requests
+        data = request.json or {}
+        url = data.get("url", "").rstrip("/")
+        username = data.get("username", "")
+        password = data.get("password", "")
+        if not url or not username or not password:
+            return jsonify({"success": False, "error": "URL, username, and password are required"})
+        try:
+            resp = _requests.get(
+                f"{url}/api/v1/libraries",
+                auth=(username, password),
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                libs = resp.json()
+                lib_names = [lib.get("name", lib.get("id", "?")) for lib in libs]
+                return jsonify({"success": True, "message": f"Connected! Libraries: {', '.join(lib_names) or 'none'}"})
+            elif resp.status_code == 401:
+                return jsonify({"success": False, "error": "Invalid credentials"})
+            else:
+                return jsonify({"success": False, "error": f"HTTP {resp.status_code}"})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)})
+
     return bp

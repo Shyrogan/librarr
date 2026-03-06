@@ -507,6 +507,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 24px; }
   <nav id="main-nav">
     <button class="active" onclick="switchTab('search')">Search</button>
     <button class="hidden" id="nav-ab-search" onclick="switchTab('ab-search')">Audiobook Search</button>
+    <button onclick="switchTab('manga-search')" id="nav-manga-search">Manga</button>
     <button onclick="switchTab('downloads')" id="dl-tab-btn">Downloads</button>
     <button class="hidden" id="nav-library" onclick="switchTab('library')">Library</button>
     <button class="hidden" id="nav-ab-library" onclick="switchTab('ab-library')">Audiobook Library</button>
@@ -567,6 +568,17 @@ main { max-width: 1100px; margin: 0 auto; padding: 24px; }
     </div>
     <div id="ab-library-grid" class="library-grid"></div>
     <div id="ab-library-pagination" class="pagination"></div>
+  </div>
+
+  <!-- Manga Search Tab -->
+  <div class="tab" id="tab-manga-search">
+    <div class="search-box">
+      <input type="text" id="manga-search-input" placeholder="Search for manga, manhwa, manhua..."
+             onkeydown="if(event.key==='Enter')doMangaSearch()">
+      <button onclick="doMangaSearch()" id="manga-search-btn">Search</button>
+    </div>
+    <div style="margin-top:8px;color:var(--text2);font-size:12px" id="manga-search-meta"></div>
+    <div id="manga-search-results"></div>
   </div>
 
   <!-- Downloads Tab -->
@@ -714,8 +726,45 @@ main { max-width: 1100px; margin: 0 auto; padding: 24px; }
         <input type="text" id="set-kavita-library-path" placeholder="/data/media/books/kavita">
       </div>
       <div class="settings-row">
+        <label>Manga Library ID</label>
+        <input type="text" id="set-kavita-manga-library-id" placeholder="2">
+      </div>
+      <div class="settings-row">
+        <label>Manga Library path (host)</label>
+        <input type="text" id="set-kavita-manga-library-path" placeholder="/data/media/books/manga">
+      </div>
+      <div class="settings-row">
         <button class="btn" onclick="testKavita()" id="test-kavita-btn" style="background:var(--accent);color:#fff;border:none;padding:6px 16px;border-radius:4px;cursor:pointer">Test Connection</button>
         <span id="kavita-test-result" style="margin-left:8px;font-size:13px"></span>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <h3><span class="status-dot off" id="dot-komga"></span> Komga</h3>
+      <p class="desc">Connect to Komga for manga and comic library management. Komga receives CBZ files after download.</p>
+      <div class="settings-row">
+        <label>URL</label>
+        <input type="text" id="set-komga-url" placeholder="http://komga:25600">
+      </div>
+      <div class="settings-row">
+        <label>Username</label>
+        <input type="text" id="set-komga-username" placeholder="admin@komga.org">
+      </div>
+      <div class="settings-row">
+        <label>Password</label>
+        <input type="password" id="set-komga-password" placeholder="Password">
+      </div>
+      <div class="settings-row">
+        <label>Library ID</label>
+        <input type="text" id="set-komga-library-id" placeholder="01ARZ3NDEKTSV4RRFFQ69G5FAV">
+      </div>
+      <div class="settings-row">
+        <label>Library path (host)</label>
+        <input type="text" id="set-komga-library-path" placeholder="/data/media/books/manga">
+      </div>
+      <div class="settings-row">
+        <button class="btn" onclick="testKomga()" style="background:var(--accent);color:#fff;border:none;padding:6px 16px;border-radius:4px;cursor:pointer">Test Connection</button>
+        <span id="komga-test-result" style="margin-left:8px;font-size:13px"></span>
       </div>
     </div>
 
@@ -731,6 +780,9 @@ main { max-width: 1100px; margin: 0 auto; padding: 24px; }
         </label>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
           <input type="checkbox" id="set-target-kavita" value="kavita"> Kavita
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="set-target-komga" value="komga"> Komga
         </label>
       </div>
       <div class="settings-row" style="align-items:flex-start">
@@ -921,7 +973,7 @@ function switchTab(tab) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + tab).classList.add('active');
-  const tabMap = { search: 'Search', 'ab-search': 'Audiobook Search', downloads: 'Downloads', library: 'Library', 'ab-library': 'Audiobook Library', activity: 'Activity', monitor: 'Monitor', settings: 'Settings' };
+  const tabMap = { search: 'Search', 'ab-search': 'Audiobook Search', 'manga-search': 'Manga', downloads: 'Downloads', library: 'Library', 'ab-library': 'Audiobook Library', activity: 'Activity', monitor: 'Monitor', settings: 'Settings' };
   document.querySelectorAll('nav button').forEach(b => {
     if (b.textContent.replace(/\d+/g, '').trim() === tabMap[tab]) b.classList.add('active');
   });
@@ -933,6 +985,7 @@ function switchTab(tab) {
   }
   if (tab === 'library') loadLibrary(1);
   if (tab === 'ab-search') document.getElementById('ab-search-input').focus();
+  if (tab === 'manga-search') document.getElementById('manga-search-input').focus();
   if (tab === 'ab-library') loadAudiobookLibrary(1);
   if (tab === 'activity') loadActivity();
   if (tab === 'monitor') { loadMonitorStatus(); startMonitorPolling(); } else { stopMonitorPolling(); }
@@ -1103,6 +1156,113 @@ async function postDownloadWithDuplicatePrompt(payload, dryRun) {
     }
   }
   return { resp, data };
+}
+
+// ---- Manga Search ----
+async function doMangaSearch() {
+  const q = document.getElementById('manga-search-input').value.trim();
+  if (!q) return;
+  const btn = document.getElementById('manga-search-btn');
+  const results = document.getElementById('manga-search-results');
+  const meta = document.getElementById('manga-search-meta');
+  btn.disabled = true;
+  btn.textContent = 'Searching...';
+  results.innerHTML = '';
+  meta.textContent = 'Searching all manga sources...';
+
+  try {
+    const resp = await fetch('/api/search/manga?q=' + encodeURIComponent(q));
+    const data = await resp.json();
+    const items = data.results || [];
+
+    meta.textContent = items.length
+      ? `${items.length} results (${data.search_time_ms}ms)`
+      : 'No results found';
+
+    if (!items.length) {
+      results.innerHTML = '<div class="empty-state"><div class="icon">&#128220;</div><p>No manga found. Try different search terms.</p></div>';
+      return;
+    }
+
+    results.innerHTML = items.map(r => {
+      const src = (data.sources || {})[r.source] || {};
+      const badge = `<span class="badge" style="background:${src.color||'#888'}">${src.label||r.source}</span>`;
+      const isTorrent = src.download_type === 'torrent';
+      const isMangaDex = r.source === 'mangadex';
+      const meta2 = [
+        r.author ? `<span>${escHtml(r.author)}</span>` : '',
+        r.chapter_count ? `<span>${escHtml(String(r.chapter_count))} chapters</span>` : '',
+        r.size_human ? `<span>${escHtml(r.size_human)}</span>` : '',
+        r.seeders != null ? `<span>${r.seeders} seeders</span>` : '',
+        r.status ? `<span>${escHtml(r.status)}</span>` : '',
+        r.indexer ? `<span>${escHtml(r.indexer)}</span>` : '',
+      ].filter(Boolean).join('');
+
+      const cover = r.cover_url
+        ? `<img src="${escHtml(r.cover_url)}" style="width:48px;height:68px;object-fit:cover;border-radius:4px;margin-right:12px;flex-shrink:0" onerror="this.style.display='none'">`
+        : '';
+
+      const dlFn = isTorrent
+        ? `downloadMangaTorrent(${JSON.stringify(r)})`
+        : isMangaDex
+          ? `downloadMangaDex(${JSON.stringify(r)})`
+          : `downloadMangaDirect(${JSON.stringify(r)})`;
+
+      return `<div class="result">
+        ${badge}
+        ${cover}
+        <div class="result-info">
+          <div class="result-title">${escHtml(r.title)}</div>
+          <div class="result-meta">${meta2}</div>
+        </div>
+        <button class="dl-btn" onclick='${dlFn}'>Download</button>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    meta.textContent = 'Search failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Search';
+  }
+}
+
+async function downloadMangaTorrent(r) {
+  try {
+    const resp = await fetch('/api/download/manga/torrent', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(r),
+    });
+    const data = await resp.json();
+    if (data.success) showToast('Queued: ' + r.title);
+    else showToast('Error: ' + (data.error || 'Unknown error'), true);
+  } catch(e) { showToast('Network error', true); }
+}
+
+async function downloadMangaDex(r) {
+  try {
+    const resp = await fetch('/api/download', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ ...r, source: 'mangadex' }),
+    });
+    const data = await resp.json();
+    if (data.success) showToast('Downloading: ' + r.title + ' (all chapters)');
+    else showToast('Error: ' + (data.error || 'Unknown error'), true);
+  } catch(e) { showToast('Network error', true); }
+}
+
+async function downloadMangaDirect(r) {
+  try {
+    const resp = await fetch('/api/download', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ ...r, source: r.source }),
+    });
+    const data = await resp.json();
+    if (data.success) showToast('Queued: ' + r.title);
+    else showToast('Error: ' + (data.error || 'Unknown error'), true);
+  } catch(e) { showToast('Network error', true); }
 }
 
 // ---- Audiobook Search ----
@@ -1443,6 +1603,14 @@ async function loadSettings() {
     document.getElementById('set-kavita-api-key').value = s.kavita_api_key || '';
     document.getElementById('set-kavita-library-id').value = s.kavita_library_id || '';
     document.getElementById('set-kavita-library-path').value = s.kavita_library_path || '';
+    document.getElementById('set-kavita-manga-library-id').value = s.kavita_manga_library_id || '';
+    document.getElementById('set-kavita-manga-library-path').value = s.kavita_manga_library_path || '';
+    // Komga
+    document.getElementById('set-komga-url').value = s.komga_url || '';
+    document.getElementById('set-komga-username').value = s.komga_username || '';
+    document.getElementById('set-komga-password').value = s.komga_password || '';
+    document.getElementById('set-komga-library-id').value = s.komga_library_id || '';
+    document.getElementById('set-komga-library-path').value = s.komga_library_path || '';
     // File organization
     document.getElementById('set-file-org-enabled').checked = s.file_org_enabled === true || s.file_org_enabled === 'true';
     document.getElementById('set-ebook-organized-dir').value = s.ebook_organized_dir || '';
@@ -1452,6 +1620,7 @@ async function loadSettings() {
     document.getElementById('set-target-calibre').checked = targets.includes('calibre');
     document.getElementById('set-target-audiobookshelf').checked = targets.includes('audiobookshelf');
     document.getElementById('set-target-kavita').checked = targets.includes('kavita');
+    document.getElementById('set-target-komga').checked = targets.includes('komga');
     document.getElementById('set-target-routing-rules').value = s.target_routing_rules || '{}';
     // Set library dropdowns if we have values
     if (s.abs_library_id) _addLibOption('set-abs-library', s.abs_library_id, s.abs_library_id);
@@ -1500,6 +1669,7 @@ function updateStatusDots() {
     calibre: appConfig.calibre,
     lncrawl: appConfig.lncrawl,
     kavita: appConfig.kavita,
+    komga: appConfig.komga,
   };
   for (const [key, val] of Object.entries(dots)) {
     const dot = document.getElementById('dot-' + key);
@@ -1630,6 +1800,28 @@ async function testKavita() {
   }
 }
 
+async function testKomga() {
+  const url = document.getElementById('set-komga-url').value.trim();
+  const username = document.getElementById('set-komga-username').value.trim();
+  const password = document.getElementById('set-komga-password').value.trim();
+  const el = document.getElementById('komga-test-result');
+  el.textContent = 'Testing...';
+  el.style.color = 'var(--text2)';
+  try {
+    const resp = await fetch('/api/test/komga', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ url, username, password }),
+    });
+    const data = await resp.json();
+    el.textContent = data.success ? (data.message || 'Connected!') : (data.error || 'Failed');
+    el.style.color = data.success ? 'var(--success)' : 'var(--danger)';
+  } catch (e) {
+    el.textContent = 'Request failed: ' + e.message;
+    el.style.color = 'var(--danger)';
+  }
+}
+
 let _activityOffset = 0;
 async function loadActivity(more) {
   if (!more) _activityOffset = 0;
@@ -1691,12 +1883,20 @@ async function saveSettings() {
     kavita_api_key: document.getElementById('set-kavita-api-key').value.trim(),
     kavita_library_id: document.getElementById('set-kavita-library-id').value.trim(),
     kavita_library_path: document.getElementById('set-kavita-library-path').value.trim(),
+    kavita_manga_library_id: document.getElementById('set-kavita-manga-library-id').value.trim(),
+    kavita_manga_library_path: document.getElementById('set-kavita-manga-library-path').value.trim(),
+    // Komga
+    komga_url: document.getElementById('set-komga-url').value.trim(),
+    komga_username: document.getElementById('set-komga-username').value.trim(),
+    komga_password: document.getElementById('set-komga-password').value.trim(),
+    komga_library_id: document.getElementById('set-komga-library-id').value.trim(),
+    komga_library_path: document.getElementById('set-komga-library-path').value.trim(),
     // File organization
     file_org_enabled: document.getElementById('set-file-org-enabled').checked ? 'true' : 'false',
     ebook_organized_dir: document.getElementById('set-ebook-organized-dir').value.trim(),
     audiobook_organized_dir: document.getElementById('set-audiobook-organized-dir').value.trim(),
     // Import targets
-    enabled_targets: ['calibre', 'audiobookshelf', 'kavita']
+    enabled_targets: ['calibre', 'audiobookshelf', 'kavita', 'komga']
       .filter(t => document.getElementById('set-target-' + t).checked).join(','),
     target_routing_rules: document.getElementById('set-target-routing-rules').value.trim() || '{}',
     // Auth

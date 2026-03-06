@@ -57,7 +57,10 @@ def _apply_settings():
     global LNCRAWL_CONTAINER, CALIBRE_CONTAINER, CALIBRE_LIBRARY
     global CALIBRE_LIBRARY_CONTAINER, CALIBRE_DB, INCOMING_DIR
     global KAVITA_URL, KAVITA_API_KEY, KAVITA_LIBRARY_ID, KAVITA_LIBRARY_PATH
-    global FILE_ORG_ENABLED, EBOOK_ORGANIZED_DIR, AUDIOBOOK_ORGANIZED_DIR
+    global KAVITA_MANGA_LIBRARY_ID, KAVITA_MANGA_LIBRARY_PATH
+    global FILE_ORG_ENABLED, EBOOK_ORGANIZED_DIR, AUDIOBOOK_ORGANIZED_DIR, MANGA_ORGANIZED_DIR
+    global QB_MANGA_SAVE_PATH, QB_MANGA_CATEGORY, MANGA_INCOMING_DIR
+    global KOMGA_URL, KOMGA_USERNAME, KOMGA_PASSWORD, KOMGA_LIBRARY_ID, KOMGA_LIBRARY_PATH
     global ENABLED_TARGETS, TARGET_ROUTING_RULES
     global API_KEY, SECRET_KEY, AUTH_USERNAME, AUTH_PASSWORD
 
@@ -101,11 +104,26 @@ def _apply_settings():
     KAVITA_API_KEY = _get("KAVITA_API_KEY", "kavita_api_key")
     KAVITA_LIBRARY_ID = _get("KAVITA_LIBRARY_ID", "kavita_library_id", "")
     KAVITA_LIBRARY_PATH = _get("KAVITA_LIBRARY_PATH", "kavita_library_path", "")
+    KAVITA_MANGA_LIBRARY_ID = _get("KAVITA_MANGA_LIBRARY_ID", "kavita_manga_library_id", "")
+    KAVITA_MANGA_LIBRARY_PATH = _get("KAVITA_MANGA_LIBRARY_PATH", "kavita_manga_library_path", "")
+
+    # Komga
+    KOMGA_URL = _get("KOMGA_URL", "komga_url", "")
+    KOMGA_USERNAME = _get("KOMGA_USERNAME", "komga_username", "")
+    KOMGA_PASSWORD = _get("KOMGA_PASSWORD", "komga_password", "")
+    KOMGA_LIBRARY_ID = _get("KOMGA_LIBRARY_ID", "komga_library_id", "")
+    KOMGA_LIBRARY_PATH = _get("KOMGA_LIBRARY_PATH", "komga_library_path", "")
 
     # File organization
     FILE_ORG_ENABLED = _get("FILE_ORG_ENABLED", "file_org_enabled", "true").lower() in ("true", "1", "yes")
     EBOOK_ORGANIZED_DIR = _get("EBOOK_ORGANIZED_DIR", "ebook_organized_dir", "/data/media/books/ebooks")
     AUDIOBOOK_ORGANIZED_DIR = _get("AUDIOBOOK_ORGANIZED_DIR", "audiobook_organized_dir", "/data/media/books/audiobooks")
+    MANGA_ORGANIZED_DIR = _get("MANGA_ORGANIZED_DIR", "manga_organized_dir", "/data/media/books/manga")
+    MANGA_INCOMING_DIR = _get("MANGA_INCOMING_DIR", "manga_incoming_dir", "/data/media/books/manga/incoming")
+
+    # Manga qBittorrent paths
+    QB_MANGA_SAVE_PATH = _get("QB_MANGA_SAVE_PATH", "qb_manga_save_path", "/manga-incoming/")
+    QB_MANGA_CATEGORY = _get("QB_MANGA_CATEGORY", "qb_manga_category", "manga")
 
     # Pipeline targets (comma-separated)
     ENABLED_TARGETS = _get("ENABLED_TARGETS", "enabled_targets", "calibre,audiobookshelf")
@@ -182,6 +200,9 @@ def has_audiobooks():
 def has_kavita():
     return bool(KAVITA_URL and KAVITA_API_KEY)
 
+def has_komga():
+    return bool(KOMGA_URL and KOMGA_USERNAME and KOMGA_PASSWORD and KOMGA_LIBRARY_ID)
+
 def get_enabled_target_names():
     """Return set of target names the user has enabled."""
     return set(t.strip() for t in ENABLED_TARGETS.split(",") if t.strip())
@@ -223,9 +244,20 @@ def get_all_settings():
         "kavita_api_key": MASKED_SECRET if KAVITA_API_KEY else "",
         "kavita_library_id": KAVITA_LIBRARY_ID,
         "kavita_library_path": KAVITA_LIBRARY_PATH,
+        "kavita_manga_library_id": KAVITA_MANGA_LIBRARY_ID,
+        "kavita_manga_library_path": KAVITA_MANGA_LIBRARY_PATH,
+        "komga_url": KOMGA_URL,
+        "komga_username": KOMGA_USERNAME,
+        "komga_password": MASKED_SECRET if KOMGA_PASSWORD else "",
+        "komga_library_id": KOMGA_LIBRARY_ID,
+        "komga_library_path": KOMGA_LIBRARY_PATH,
         "file_org_enabled": FILE_ORG_ENABLED,
         "ebook_organized_dir": EBOOK_ORGANIZED_DIR,
         "audiobook_organized_dir": AUDIOBOOK_ORGANIZED_DIR,
+        "manga_organized_dir": MANGA_ORGANIZED_DIR,
+        "manga_incoming_dir": MANGA_INCOMING_DIR,
+        "qb_manga_save_path": QB_MANGA_SAVE_PATH,
+        "qb_manga_category": QB_MANGA_CATEGORY,
         "enabled_targets": ENABLED_TARGETS,
         "target_routing_rules": TARGET_ROUTING_RULES,
         "api_key": MASKED_SECRET if API_KEY else "",
@@ -262,9 +294,20 @@ def get_all_settings_unmasked():
         "kavita_api_key": KAVITA_API_KEY,
         "kavita_library_id": KAVITA_LIBRARY_ID,
         "kavita_library_path": KAVITA_LIBRARY_PATH,
+        "kavita_manga_library_id": KAVITA_MANGA_LIBRARY_ID,
+        "kavita_manga_library_path": KAVITA_MANGA_LIBRARY_PATH,
+        "komga_url": KOMGA_URL,
+        "komga_username": KOMGA_USERNAME,
+        "komga_password": KOMGA_PASSWORD,
+        "komga_library_id": KOMGA_LIBRARY_ID,
+        "komga_library_path": KOMGA_LIBRARY_PATH,
         "file_org_enabled": FILE_ORG_ENABLED,
         "ebook_organized_dir": EBOOK_ORGANIZED_DIR,
         "audiobook_organized_dir": AUDIOBOOK_ORGANIZED_DIR,
+        "manga_organized_dir": MANGA_ORGANIZED_DIR,
+        "manga_incoming_dir": MANGA_INCOMING_DIR,
+        "qb_manga_save_path": QB_MANGA_SAVE_PATH,
+        "qb_manga_category": QB_MANGA_CATEGORY,
         "enabled_targets": ENABLED_TARGETS,
         "target_routing_rules": TARGET_ROUTING_RULES,
         "api_key": API_KEY,

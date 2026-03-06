@@ -85,6 +85,55 @@ def create_blueprint(ctx):
             "sources": ctx["source_health_metadata"](),
         })
 
+    @bp.route("/api/search/manga")
+    def api_search_manga():
+        query = request.args.get("q", "").strip()
+        if not query:
+            return jsonify({"results": [], "error": "No query provided"})
+        start = time.time()
+        enabled = ctx["sources"].get_enabled_sources(tab="manga")
+
+        with ThreadPoolExecutor(max_workers=max(len(enabled), 1)) as executor:
+            futures = {executor.submit(ctx["search_source_safe"], s, query): s for s in enabled}
+            results = []
+            try:
+                for future in as_completed(futures, timeout=35):
+                    source = futures[future]
+                    try:
+                        batch = future.result()
+                        for r in batch:
+                            r.setdefault("source", source.name)
+                        results.extend(batch)
+                    except Exception as e:
+                        logger.error("Manga search wrapper error (%s): %s", source.name, e)
+            except TimeoutError:
+                logger.warning("Manga search timed out — returning partial results")
+
+        elapsed = int((time.time() - start) * 1000)
+        return jsonify({
+            "results": results,
+            "search_time_ms": elapsed,
+            "sources": ctx["source_health_metadata"](),
+        })
+
+    @bp.route("/api/download/manga/torrent", methods=["POST"])
+    def api_download_manga_torrent():
+        if not config.has_qbittorrent():
+            return jsonify({"success": False, "error": "qBittorrent not configured"}), 400
+        data = request.json or {}
+        guid = data.get("guid", "")
+        url = data.get("download_url") or (guid if guid.startswith("magnet:") else "") or data.get("magnet_url", "")
+        if not url and data.get("info_hash"):
+            url = f"magnet:?xt=urn:btih:{data['info_hash']}"
+        title = data.get("title", "Unknown")
+        if not url:
+            return jsonify({"success": False, "error": "No download URL"}), 400
+        dup = ctx["duplicate_summary"](title=title, source_id=ctx["extract_download_source_id"](data))
+        if dup["duplicate"] and not ctx["truthy"](data.get("force")):
+            return jsonify({"success": False, "error": "Duplicate detected", "duplicate_check": dup}), 409
+        success = qb.add_torrent(url, title, save_path=config.QB_MANGA_SAVE_PATH, category=config.QB_MANGA_CATEGORY)
+        return jsonify({"success": success, "title": title})
+
     @bp.route("/api/download/torrent", methods=["POST"])
     def api_download_torrent():
         if not config.has_qbittorrent():
@@ -296,7 +345,13 @@ def create_blueprint(ctx):
         title = data.get("title", "Unknown")
         requested_targets = ctx["parse_requested_targets"](data)
         source_id = ctx["extract_download_source_id"](data)
-        media_type_guess = "audiobook" if getattr(source, "search_tab", "main") == "audiobook" else "ebook"
+        _tab = getattr(source, "search_tab", "main")
+        if _tab == "audiobook":
+            media_type_guess = "audiobook"
+        elif _tab == "manga":
+            media_type_guess = "manga"
+        else:
+            media_type_guess = "ebook"
 
         if ctx["truthy"](data.get("dry_run")):
             dry_payload = dict(data)
@@ -324,6 +379,9 @@ def create_blueprint(ctx):
             if source.search_tab == "audiobook":
                 save_path = config.QB_AUDIOBOOK_SAVE_PATH
                 category = config.QB_AUDIOBOOK_CATEGORY
+            elif source.search_tab == "manga":
+                save_path = config.QB_MANGA_SAVE_PATH
+                category = config.QB_MANGA_CATEGORY
             else:
                 save_path = config.QB_SAVE_PATH
                 category = config.QB_CATEGORY

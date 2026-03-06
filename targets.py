@@ -134,6 +134,9 @@ class KavitaTarget:
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     def import_book(self, file_path, title="", author="", media_type="ebook"):
+        if media_type == "manga":
+            self.scan(library_id=config.KAVITA_MANGA_LIBRARY_ID)
+            return {"kavita_manga_scanned": True}
         if media_type != "ebook":
             return None
         # File should already be copied to KAVITA_LIBRARY_PATH by the pipeline
@@ -141,6 +144,13 @@ class KavitaTarget:
         return {"kavita_scanned": True}
 
     def verify_import(self, file_path, title="", author="", media_type="ebook", import_result=None):
+        if media_type == "manga":
+            if not config.KAVITA_MANGA_LIBRARY_PATH:
+                return {"ok": None, "mode": "filesystem", "reason": "kavita_manga_library_path_not_configured"}
+            safe_series = _safe_name(title or "Unknown")
+            fname = os.path.basename(file_path)
+            expected = os.path.join(config.KAVITA_MANGA_LIBRARY_PATH, safe_series, fname)
+            return {"ok": os.path.exists(expected), "mode": "filesystem", "path": expected}
         if media_type != "ebook":
             return {"ok": None, "mode": "unsupported"}
         if not config.KAVITA_LIBRARY_PATH:
@@ -159,7 +169,7 @@ class KavitaTarget:
             resp = requests.post(
                 f"{config.KAVITA_URL}/api/Library/scan",
                 headers=self._headers(),
-                json={"libraryId": int(lib_id)},
+                params={"libraryId": int(lib_id)},
                 timeout=10,
             )
             if resp.status_code == 401:
@@ -168,7 +178,7 @@ class KavitaTarget:
                 resp = requests.post(
                     f"{config.KAVITA_URL}/api/Library/scan",
                     headers=self._headers(),
-                    json={"libraryId": int(lib_id)},
+                    params={"libraryId": int(lib_id)},
                     timeout=10,
                 )
             if resp.status_code == 200:
@@ -224,12 +234,73 @@ class AudiobookshelfTarget:
         return {"ok": False, "mode": "filesystem", "path": file_path, "reason": "path_missing"}
 
 
+class KomgaTarget:
+    """Import manga/comics into Komga by triggering a library scan."""
+
+    name = "komga"
+    label = "Komga"
+
+    def enabled(self):
+        return config.has_komga()
+
+    def _auth(self):
+        return (config.KOMGA_USERNAME, config.KOMGA_PASSWORD)
+
+    def import_book(self, file_path, title="", author="", media_type="ebook"):
+        if media_type != "manga":
+            return None
+        if config.KOMGA_LIBRARY_PATH:
+            try:
+                safe_series = _safe_name(title or "Unknown")
+                dest_dir = os.path.join(config.KOMGA_LIBRARY_PATH, safe_series)
+                os.makedirs(dest_dir, exist_ok=True)
+                import shutil
+                dest = os.path.join(dest_dir, os.path.basename(file_path))
+                if os.path.abspath(file_path) != os.path.abspath(dest):
+                    shutil.copy2(file_path, dest)
+                    logger.info(f"Copied to Komga library: {dest}")
+            except Exception as e:
+                logger.warning(f"Komga copy failed: {e}")
+        self._scan()
+        return {"komga_scanned": True}
+
+    def _scan(self):
+        if not config.KOMGA_LIBRARY_ID:
+            return
+        try:
+            resp = requests.post(
+                f"{config.KOMGA_URL}/api/v1/libraries/{config.KOMGA_LIBRARY_ID}/scan",
+                auth=self._auth(),
+                timeout=15,
+            )
+            if resp.status_code in (200, 202):
+                logger.info("Komga library scan triggered")
+            else:
+                logger.warning(f"Komga scan returned HTTP {resp.status_code}")
+        except Exception as e:
+            logger.error(f"Komga scan failed: {e}")
+
+    def verify_import(self, file_path, title="", author="", media_type="ebook", import_result=None):
+        if media_type != "manga":
+            return {"ok": None, "mode": "unsupported"}
+        if not config.KOMGA_LIBRARY_PATH:
+            return {"ok": None, "mode": "filesystem", "reason": "komga_library_path_not_configured"}
+        safe_series = _safe_name(title or "Unknown")
+        fname = os.path.basename(file_path)
+        expected = os.path.join(config.KOMGA_LIBRARY_PATH, safe_series, fname)
+        return {"ok": os.path.exists(expected), "mode": "filesystem", "path": expected}
+
+    def scan(self):
+        self._scan()
+
+
 # --- Target Registry ---
 
 ALL_TARGETS = {
     "calibre": CalibreTarget(),
     "kavita": KavitaTarget(),
     "audiobookshelf": AudiobookshelfTarget(),
+    "komga": KomgaTarget(),
 }
 
 

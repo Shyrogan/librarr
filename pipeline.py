@@ -34,6 +34,41 @@ def organize_file(file_path, title, author, media_type="ebook"):
 
     if media_type == "audiobook":
         base_dir = config.AUDIOBOOK_ORGANIZED_DIR
+    elif media_type == "manga":
+        # Manga: {MANGA_ORGANIZED_DIR}/{series}/{filename} — flat series structure
+        dest_dir = os.path.join(config.MANGA_ORGANIZED_DIR, safe_title)
+        os.makedirs(dest_dir, exist_ok=True)
+        if os.path.isdir(file_path):
+            dest = dest_dir
+            if os.path.abspath(file_path) != os.path.abspath(dest):
+                try:
+                    shutil.move(file_path, dest)
+                    logger.info(f"Organized manga folder: {dest}")
+                    file_path = dest
+                except Exception as e:
+                    logger.error(f"organize_file (manga folder) failed: {e}")
+        else:
+            fname = os.path.basename(file_path)
+            dest = os.path.join(dest_dir, fname)
+            if os.path.abspath(file_path) != os.path.abspath(dest):
+                try:
+                    shutil.move(file_path, dest)
+                    logger.info(f"Organized manga: {dest}")
+                    file_path = dest
+                except Exception as e:
+                    logger.error(f"organize_file (manga) failed: {e}")
+        # Copy to Kavita manga library
+        if config.KAVITA_MANGA_LIBRARY_PATH:
+            try:
+                kavita_dir = os.path.join(config.KAVITA_MANGA_LIBRARY_PATH, safe_title)
+                os.makedirs(kavita_dir, exist_ok=True)
+                dest_file = os.path.join(kavita_dir, os.path.basename(file_path))
+                if os.path.abspath(file_path) != os.path.abspath(dest_file):
+                    shutil.copy2(file_path, dest_file)
+                    logger.info(f"Copied manga to Kavita: {dest_file}")
+            except Exception as e:
+                logger.warning(f"Kavita manga copy failed: {e}")
+        return file_path
     else:
         base_dir = config.EBOOK_ORGANIZED_DIR
 

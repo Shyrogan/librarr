@@ -302,7 +302,7 @@ class NovelAnnasWorkers:
             self.logger.error("[Anna's] Download attempt failed for %s: %s", url, e)
             return None, None
 
-    def download_from_annas(self, job_id, md5, title):
+    def download_from_annas(self, job_id, md5, title, media_type="ebook"):
         try:
             self.download_jobs[job_id]["detail"] = "Fetching download link from Anna's Archive..."
             ads_resp = self.requests.get(
@@ -346,7 +346,7 @@ class NovelAnnasWorkers:
             self.pipeline.run_pipeline(
                 filepath,
                 title=title,
-                media_type="ebook",
+                media_type=media_type,
                 source="annas",
                 source_id=md5,
                 job_id=job_id,
