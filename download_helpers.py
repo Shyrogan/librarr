@@ -142,13 +142,15 @@ class DownloadHelpers:
         _SW = {"the","a","an","of","in","to","for","and","or","is","it","at","by","on","with","as","from","that","this","not"}
         q_words = [w for w in re.findall(r"\w+", q) if w not in _SW]
         combined_words = set(re.findall(r"\w+", combined))
-        # If ANY significant query word matches the title, it is relevant
-        # This handles "underlord will wight" matching title "Underlord"
         t_words = set(re.findall(r"\w+", t))
-        if q_words and any(w in t_words for w in q_words):
+        if not q_words:
+            return False
+        # Check title word overlap - require at least 50% of query words
+        title_overlap = sum(1 for w in q_words if w in t_words) / len(q_words)
+        if title_overlap >= 0.6:
             return True
-        # Also check combined (title + author)
-        if q_words and all(w in combined_words for w in q_words):
+        # Check combined (title + author) - require all query words present
+        if all(w in combined_words for w in q_words):
             return True
         return False
 
