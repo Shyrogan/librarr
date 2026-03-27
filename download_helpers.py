@@ -130,12 +130,27 @@ class DownloadHelpers:
         }
 
     @staticmethod
-    def title_relevant(query, title):
-        q_words = set(re.findall(r"\w+", query.lower())) - _STOPWORDS
-        t_words = set(re.findall(r"\w+", title.lower())) - _STOPWORDS
-        if not q_words or not t_words:
-            return False
-        return len(q_words & t_words) >= 1
+    def title_relevant(query, title, author=""):
+        q = query.lower().strip()
+        t = title.lower().strip()
+        a = author.lower().strip() if author else ""
+        combined = t + " " + a
+        # Full phrase match in title or title+author
+        if q in combined:
+            return True
+        # Without stopwords
+        _SW = {"the","a","an","of","in","to","for","and","or","is","it","at","by","on","with","as","from","that","this","not"}
+        q_words = [w for w in re.findall(r"\w+", q) if w not in _SW]
+        combined_words = set(re.findall(r"\w+", combined))
+        # If ANY significant query word matches the title, it is relevant
+        # This handles "underlord will wight" matching title "Underlord"
+        t_words = set(re.findall(r"\w+", t))
+        if q_words and any(w in t_words for w in q_words):
+            return True
+        # Also check combined (title + author)
+        if q_words and all(w in combined_words for w in q_words):
+            return True
+        return False
 
     def filter_results(self, results, query):
         filtered = []
@@ -152,9 +167,9 @@ class DownloadHelpers:
                 if r.get("seeders", 0) < 1:
                     continue
                 size = r.get("size", 0)
-                if size and (size < 10_000 or size > 500_000_000):
+                if size and (size < 10_000 or size > 2_000_000_000):
                     continue
-                if not self.title_relevant(query, title):
+                if not self.title_relevant(query, title, r.get("author", r.get("authors", ""))):
                     continue
                 norm = re.sub(r"[^a-z0-9]", "", title.lower())[:60]
                 if norm in seen_titles:
@@ -168,9 +183,39 @@ class DownloadHelpers:
             elif source == "audiobook":
                 if r.get("seeders", 0) < 1 and not r.get("abb_url"):
                     continue
-                if not self.title_relevant(query, title):
+                if not self.title_relevant(query, title, r.get("author", r.get("authors", ""))):
                     continue
+
+            # Check title relevance for all sources (not just torrents)
+            if source not in ('torrent', 'audiobook') and not self.title_relevant(query, title):
+                continue
 
             filtered.append(r)
 
+        # Sort: complete editions first, then Anna's Archive, then by size
+        def _sort_key(r):
+            source = r.get('source', '')
+            size = r.get('size', 0)
+            seeds = r.get('seeders', 0)
+            title = r.get('title', '').lower()
+            
+            # Detect partial/volume indicators — penalize these
+            import re as _re
+            is_partial = bool(_re.search(r'(arc|vol|book|part|chapter)\s*\d', title, _re.IGNORECASE))
+            
+            # Source priority: annas > torrent with seeds > free sources
+            if source == 'annas':
+                src_priority = 0
+            elif source == 'torrent' and seeds > 0:
+                src_priority = 1
+            elif source in ('gutenberg', 'openlibrary', 'standardebooks'):
+                src_priority = 3
+            else:
+                src_priority = 2
+            
+            # Complete editions sort before partials within same source
+            partial_penalty = 1 if is_partial else 0
+            return (src_priority, partial_penalty, -size)
+
+        filtered.sort(key=_sort_key)
         return filtered

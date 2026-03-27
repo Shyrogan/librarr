@@ -236,7 +236,7 @@ def create_blueprint(ctx):
         ctx["download_jobs"][job_id] = ctx["base_job_fields"](
             title,
             "annas",
-            url=f"https://annas-archive.li/md5/{md5}",
+            url=f"https://annas-archive.gd/md5/{md5}",
             target_names=ctx["parse_requested_targets"](data),
             retry_kind="annas",
             retry_payload={"md5": md5, "title": title},

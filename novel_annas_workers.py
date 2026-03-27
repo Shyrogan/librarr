@@ -47,6 +47,42 @@ class NovelAnnasWorkers:
         for cf in glob.glob(os.path.join(incoming, "cover.*")):
             os.remove(cf)
 
+
+    def _verify_epub_title(self, filepath, expected_title):
+        """Check that the downloaded epub actually contains the expected book.
+        Returns (ok, actual_title). Prevents wrong-book downloads."""
+        try:
+            import zipfile, re
+            with zipfile.ZipFile(filepath, 'r') as z:
+                for name in z.namelist():
+                    if name.endswith('.opf'):
+                        content = z.read(name).decode('utf-8', errors='ignore')
+                        title_m = re.search(r'<dc:title[^>]*>(.*?)</dc:title>', content)
+                        if title_m:
+                            actual = title_m.group(1).strip()
+                            expected_clean = re.sub(r'\([^)]*\)', '', expected_title).strip().lower()
+                            actual_clean = re.sub(r'\([^)]*\)', '', actual).strip().lower()
+                            # Remove common prefixes/suffixes
+                            for prefix in ['mistborn: ', 'stormlight archive ', 'the ']:
+                                expected_clean = expected_clean.removeprefix(prefix)
+                                actual_clean = actual_clean.removeprefix(prefix)
+                            # Check word overlap
+                            exp_words = set(re.findall(r'\w+', expected_clean)) - {'the','a','an','of','in','book','series'}
+                            act_words = set(re.findall(r'\w+', actual_clean)) - {'the','a','an','of','in','book','series'}
+                            if exp_words and act_words:
+                                overlap = len(exp_words & act_words) / max(len(exp_words), 1)
+                                if overlap < 0.3:
+                                    self.logger.warning(
+                                        "[Verify] WRONG BOOK: expected '%s', got '%s' (overlap=%.0f%%)",
+                                        expected_title, actual, overlap * 100,
+                                    )
+                                    return False, actual
+                            return True, actual
+                        break
+        except Exception as e:
+            self.logger.debug("[Verify] Could not verify epub: %s", e)
+        return True, ""  # Can't verify = assume ok
+
     def download_novel_worker(self, job_id, url, title):
         self.download_jobs[job_id]["status"] = "downloading"
 
@@ -82,7 +118,22 @@ class NovelAnnasWorkers:
                 matched = [r for r in annas_results if _title_match(title, r["title"])]
                 if matched:
                     matched.sort(key=lambda r: _parse_size_mb(r.get("size_human", "")), reverse=True)
-                    for i, candidate in enumerate(matched[:3]):
+                    # Quick libgen check: prefer candidates with working download links
+                    def _check_libgen(c):
+                        try:
+                            r = self.requests.get(
+                                f"https://libgen.li/ads.php?md5={c['md5']}",
+                                headers={"User-Agent": "Mozilla/5.0"},
+                                timeout=8,
+                            )
+                            return bool(re.search(r'href="get\.php\?md5=[^"]+"', r.text)) if r.status_code == 200 else False
+                        except Exception:
+                            return False
+                    for c in matched[:8]:
+                        c["_libgen_ok"] = _check_libgen(c)
+                    # Sort: libgen-available first, then by size desc
+                    matched.sort(key=lambda r: (r.get("_libgen_ok", False), _parse_size_mb(r.get("size_human", ""))), reverse=True)
+                    for i, candidate in enumerate(matched[:5]):
                         self.logger.info(
                             "[%s] Trying Anna's Archive #%s: %s (%s)",
                             title,
@@ -313,33 +364,63 @@ class NovelAnnasWorkers:
 
             download_url = None
             if ads_resp.status_code == 200:
-                get_match = re.search(r'href=\"(get\\.php\\?md5=[^\"]+)\"', ads_resp.text)
+                get_match = re.search(r'href="(get[.]php[?]md5=[^"]+)"', ads_resp.text)
                 if get_match:
                     download_url = f"https://libgen.li/{get_match.group(1)}"
                     self.logger.info("[Anna's] Found libgen GET link for %s", title)
 
             if not download_url:
+                self.logger.warning("[Anna's] No get.php link found for %s (md5=%s), trying alt search", title, md5)
                 self.download_jobs[job_id]["detail"] = "Trying alternative mirrors..."
-                resp = self.requests.get(
-                    f"https://annas-archive.li/md5/{md5}",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    timeout=15,
-                )
-                if resp.status_code == 200:
-                    for m in re.finditer(r'href=\"(https?://libgen\\.li/file\\.php\\?id=\\d+)\"', resp.text):
-                        download_url = m.group(1)
-                        break
+                # Search Anna's Archive for the same title to find an MD5 with a working libgen link
+                try:
+                    alt_results = self.search_annas_archive(title)
+                    for alt in alt_results[:10]:
+                        alt_md5 = alt.get("md5", "")
+                        if alt_md5 == md5 or not alt_md5:
+                            continue
+                        try:
+                            alt_resp = self.requests.get(
+                                f"https://libgen.li/ads.php?md5={alt_md5}",
+                                headers={"User-Agent": "Mozilla/5.0"},
+                                timeout=10,
+                            )
+                            if alt_resp.status_code == 200:
+                                alt_get = re.search(r'href="(get\.php\?md5=[^"]+)"', alt_resp.text)
+                                if alt_get:
+                                    download_url = f"https://libgen.li/{alt_get.group(1)}"
+                                    self.logger.info("[Anna's] Found alt libgen link for %s via md5=%s", title, alt_md5)
+                                    break
+                        except Exception:
+                            continue
+                except Exception as e:
+                    self.logger.warning("[Anna's] Alt search failed for %s: %s", title, e)
 
             if not download_url:
+                self.logger.error("[Anna's] No download URL found for %s (md5=%s)", title, md5)
+                self.download_jobs[job_id]["error"] = "No download link found on libgen or mirrors"
                 return False
 
             self.download_jobs[job_id]["detail"] = "Downloading EPUB..."
             self.logger.info("[Anna's] Downloading %s from %s", title, download_url)
             filepath, file_size = self.try_download_url(download_url, job_id, connect_timeout=15, read_timeout=300)
             if not filepath:
+                self.logger.error("[Anna's] try_download_url returned None for %s from %s", title, download_url[:60])
+                self.download_jobs[job_id]["error"] = "Download returned empty or error page"
                 return False
 
             self.logger.info("[Anna's] Downloaded %s: %s", title, self.human_size(file_size))
+
+            # Verify the epub contains the right book
+            ok, actual_title = self._verify_epub_title(filepath, title)
+            if not ok:
+                self.logger.error("[Anna's] Wrong book for %s — got '%s'. Deleting.", title, actual_title)
+                self.download_jobs[job_id]["error"] = f"Wrong book: expected '{title}', got '{actual_title}'"
+                try:
+                    os.remove(filepath)
+                except OSError:
+                    pass
+                return False
             self.download_jobs[job_id]["status"] = "importing"
             self.download_jobs[job_id]["detail"] = "Processing..."
 

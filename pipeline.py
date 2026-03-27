@@ -21,6 +21,22 @@ def sanitize_filename(name, max_len=80):
     return name or "Unknown"
 
 
+def clean_series_title(name):
+    """Clean a torrent name into a series title for directory naming."""
+    # Strip file extensions
+    name = re.sub(r"\.(epub|cbz|cbr|pdf|zip|mobi|azw3)$", "", name, flags=re.IGNORECASE)
+    # Strip release group tags like [VIZ Media] [Bondman] [1r0n]
+    name = re.sub(r"\[[^\]]*\]", "", name)
+    # Strip parenthetical tags like (Digital) (f) (c2c)
+    name = re.sub(r"\((?:Digital|f|c2c|Viz|Complete)\)", "", name, flags=re.IGNORECASE)
+    # Strip volume/chapter ranges like v01-32, 1-39, Vol. 1-10
+    name = re.sub(r"\s*(?:Vol\.?|Volume|v)\s*\d+.*$", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\s*\d+-\d+.*$", "", name)
+    # Clean up whitespace
+    name = re.sub(r"\s+", " ", name).strip().rstrip("-").strip()
+    return name or "Unknown"
+
+
 def organize_file(file_path, title, author, media_type="ebook"):
     if not config.FILE_ORG_ENABLED:
         return file_path
@@ -29,8 +45,28 @@ def organize_file(file_path, title, author, media_type="ebook"):
         logger.warning(f"organize_file: path not found: {file_path}")
         return file_path
 
+    # Try to extract author from epub metadata if not provided
+    if not author or author == "Unknown":
+        try:
+            import zipfile, re as _re
+            if file_path.endswith('.epub') and os.path.isfile(file_path):
+                with zipfile.ZipFile(file_path, 'r') as z:
+                    for name in z.namelist():
+                        if name.endswith('.opf'):
+                            opf = z.read(name).decode('utf-8', errors='ignore')
+                            author_m = _re.search(r'<dc:creator[^>]*>(.*?)</dc:creator>', opf)
+                            if author_m:
+                                author = author_m.group(1).strip()
+                                logger.info(f"Extracted author from epub: {author}")
+                            break
+        except Exception:
+            pass
+
     safe_author = sanitize_filename(author or "Unknown")
     safe_title = sanitize_filename(title or "Unknown")
+
+    if media_type == "manga":
+        safe_title = clean_series_title(title or "Unknown")
 
     if media_type == "audiobook":
         base_dir = config.AUDIOBOOK_ORGANIZED_DIR
@@ -135,6 +171,451 @@ def _resolve_target_names(media_type, source, requested_target_names=None):
     except Exception:
         return enabled
     return selected
+
+
+
+
+def _cleanup_abs_after_import(title, media_type, logger):
+    """After import, clean up ABS duplicates and invalidate stale covers."""
+    try:
+        import config
+        if not config.has_audiobookshelf():
+            return
+        import requests, subprocess, re, threading
+
+        def _cleanup_worker():
+            try:
+                abs_url = config.ABS_URL
+                token = config.ABS_TOKEN
+                headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+                lib_id = config.ABS_EBOOK_LIBRARY_ID if media_type == "ebook" else config.ABS_LIBRARY_ID
+                if not lib_id:
+                    return
+
+                # Trigger scan to pick up new files
+                requests.post(f"{abs_url}/api/libraries/{lib_id}/scan?force=1", headers=headers, timeout=10)
+                import time
+                time.sleep(10)
+
+                # Get all items
+                all_items = []
+                page = 0
+                while True:
+                    r = requests.get(f"{abs_url}/api/libraries/{lib_id}/items",
+                        params={"limit": 100, "page": page}, headers=headers, timeout=15)
+                    if r.status_code != 200:
+                        break
+                    results = r.json().get("results", [])
+                    all_items.extend(results)
+                    if len(results) < 100:
+                        break
+                    page += 1
+
+                # Deduplicate by normalized title — keep Calibre (ID) versions
+                import os
+                seen = {}
+                for item in all_items:
+                    meta = item.get("media", {}).get("metadata", {})
+                    item_title = meta.get("title", "")
+                    iid = item["id"]
+                    path = item.get("path", "")
+
+                    if item_title.lower() == "incoming" or not item_title:
+                        requests.delete(f"{abs_url}/api/items/{iid}?hard=1", headers=headers, timeout=10)
+                        continue
+
+                    # Normalize title for dedup
+                    key = item_title.lower()
+                    key = re.sub(r'\([^)]*\)', '', key).strip()
+                    key = re.sub(r':\s.*$', '', key).strip()
+                    for prefix in ['mistborn: ', 'stormlight archive \d+ - ']:
+                        key = re.sub(prefix, '', key)
+                    key = key.strip()
+
+                    in_calibre = bool(re.search(r'\(\d+\)$', os.path.basename(path)))
+
+                    if key in seen:
+                        # Keep the one in Calibre dir, delete the other
+                        if in_calibre and not seen[key]["in_calibre"]:
+                            # New one is better, delete old
+                            requests.delete(f"{abs_url}/api/items/{seen[key]['id']}?hard=1", headers=headers, timeout=10)
+                            logger.info("[ABS-cleanup] Replaced dup: %s", item_title)
+                            seen[key] = {"id": iid, "in_calibre": True}
+                        else:
+                            # Old one is better, delete new
+                            requests.delete(f"{abs_url}/api/items/{iid}?hard=1", headers=headers, timeout=10)
+                            logger.info("[ABS-cleanup] Removed dup: %s", item_title)
+                    else:
+                        seen[key] = {"id": iid, "in_calibre": in_calibre}
+
+                # Clear cover cache for the newly imported book
+                for item in all_items:
+                    meta = item.get("media", {}).get("metadata", {})
+                    if title.lower()[:20] in meta.get("title", "").lower():
+                        subprocess.run(
+                            ["docker", "exec", "audiobookshelf", "rm", "-rf",
+                             f"/metadata/items/{item['id']}"],
+                            capture_output=True, timeout=5,
+                        )
+
+            except Exception as e:
+                logger.warning("[ABS-cleanup] Failed: %s", e)
+
+        threading.Thread(target=_cleanup_worker, daemon=True).start()
+    except Exception as e:
+        logger.warning("[ABS-cleanup] Setup failed: %s", e)
+
+
+def _lookup_series_from_web(title, author, logger):
+    """Look up series info from Open Library and Google Books APIs.
+
+    Returns: (series_name, sequence_number) or (None, None)
+    """
+    import requests, re
+
+    clean_title = re.sub(r'\([^)]*\)', '', title).strip()
+    clean_title = re.sub(r'\[.*?\]', '', clean_title).strip()
+    clean_title = re.sub(r'\s*[-:]\s*(A |An )?LitRPG.*$', '', clean_title, flags=re.IGNORECASE).strip()
+    clean_title = re.sub(r':\s+.*$', '', clean_title).strip()  # Strip any subtitle after colon
+    clean_title = re.sub(r',?\s*Book\s*\d+.*$', '', clean_title, flags=re.IGNORECASE).strip()
+
+    # --- Open Library ---
+    try:
+        q = f"{clean_title} {author}".strip() if author else clean_title
+        r = requests.get(
+            "https://openlibrary.org/search.json",
+            params={"q": q, "limit": 5, "fields": "title,author_name,subject,edition_key,key"},
+            headers={"User-Agent": "Librarr/1.0"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            docs = r.json().get("docs", [])
+            for doc in docs[:3]:
+                work_key = doc.get("key", "")
+                if not work_key:
+                    continue
+                # Fetch the work details which may have series info
+                wr = requests.get(
+                    f"https://openlibrary.org{work_key}.json",
+                    headers={"User-Agent": "Librarr/1.0"},
+                    timeout=10,
+                )
+                if wr.status_code == 200:
+                    work = wr.json()
+                    # Check for series links
+                    links = work.get("links", [])
+                    for link in links:
+                        link_title = link.get("title", "")
+                        if "series" in link_title.lower():
+                            logger.info("[Web-classify] OL series link: %s", link_title)
+
+                    # Check subjects for series patterns
+                    subjects = work.get("subjects", [])
+                    for subj in subjects:
+                        if isinstance(subj, str):
+                            # Look for "Series Name, Book N" patterns
+                            m = re.match(r'^(.+?),?\s*(?:Book|Vol|#)\s*(\d+\.?\d*)', subj, re.IGNORECASE)
+                            if m:
+                                return m.group(1).strip(), m.group(2)
+    except Exception as e:
+        logger.debug("[Web-classify] Open Library error: %s", e)
+
+    # --- Google Books ---
+    try:
+        q = f'intitle:"{clean_title}"'
+        if author:
+            q += f' inauthor:"{author}"'
+        r = requests.get(
+            "https://www.googleapis.com/books/v1/volumes",
+            params={"q": q, "maxResults": 5, "printType": "books"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            items = r.json().get("items", [])
+            for item in items[:3]:
+                vol = item.get("volumeInfo", {})
+                gb_title = vol.get("title", "")
+                # Check if title is a reasonable match
+                if not _fuzzy_title_match(clean_title, gb_title):
+                    continue
+
+                # Google Books sometimes has series in the title or subtitle
+                subtitle = vol.get("subtitle", "")
+                description = vol.get("description", "")
+
+                # Check subtitle for series info: "Book 3 of The Stormlight Archive"
+                for text in [subtitle, gb_title]:
+                    m = re.search(
+                        r'(?:Book|Volume|#)\s*(\d+\.?\d*)\s*(?:of|in|:)\s*(?:the\s+)?(.+?)(?:\s*series)?$',
+                        text, re.IGNORECASE,
+                    )
+                    if m:
+                        return m.group(2).strip(), m.group(1)
+                    # "Series Name #N"
+                    m2 = re.search(r'(.+?)\s*#(\d+\.?\d*)$', text)
+                    if m2:
+                        return m2.group(1).strip(), m2.group(2)
+
+                # Check description for series references
+                if description:
+                    # "the third book in the Cradle series"
+                    ordinals = {'first': '1', 'second': '2', 'third': '3', 'fourth': '4',
+                                'fifth': '5', 'sixth': '6', 'seventh': '7', 'eighth': '8',
+                                'ninth': '9', 'tenth': '10', 'eleventh': '11', 'twelfth': '12'}
+                    m = re.search(
+                        r'(?:the\s+)?(\w+)\s+(?:book|novel|volume|installment)\s+(?:in|of)\s+(?:the\s+)?(.+?)\s*(?:series|saga|trilogy|sequence)',
+                        description, re.IGNORECASE,
+                    )
+                    if m:
+                        ordinal = m.group(1).lower()
+                        series_name = m.group(2).strip()
+                        # Strip marketing adjectives from series name
+                        series_name = re.sub(r'^(?:wildly\s+)?(?:popular|acclaimed|bestselling|award-winning|beloved|epic|exciting|incredible|amazing|new|addictive|hit|smash)(?:\s+and\s+\w+)?\s+', '', series_name, flags=re.IGNORECASE).strip()
+                        seq = ordinals.get(ordinal, "")
+                        if not seq:
+                            # Try numeric
+                            try:
+                                seq = str(int(ordinal))
+                            except ValueError:
+                                seq = ""
+                        if seq and series_name:
+                            return series_name, seq
+
+                    # "Book N in the Series Name"
+                    m2 = re.search(
+                        r'(?:Book|Volume)\s+(\d+)\s+(?:in|of)\s+(?:the\s+)?(.+?)\s*(?:series|saga|trilogy|$)',
+                        description, re.IGNORECASE,
+                    )
+                    if m2:
+                        return m2.group(2).strip().rstrip('.'), m2.group(1)
+
+                    # "the X series" pattern - most reliable
+                    m3 = re.search(
+                        r'(?:the|this)\s+(.+?)\s+series',
+                        description, re.IGNORECASE,
+                    )
+                    if m3:
+                        candidate = m3.group(1).strip()
+                        # Clean up adjectives before the series name
+                        candidate = re.sub(r'^(?:wildly\s+)?(?:popular|acclaimed|bestselling|award-winning|beloved|epic|exciting|incredible|amazing|new|addictive)(?:\s+and\s+\w+)?\s+', '', candidate, flags=re.IGNORECASE).strip()
+                        if 2 <= len(candidate) <= 60 and candidate[0].isupper():
+                            # Try to find the book number
+                            seq = ''
+                            # "first/second/third book in the X series"
+                            ordinals = {'first': '1', 'second': '2', 'third': '3', 'fourth': '4',
+                                        'fifth': '5', 'sixth': '6', 'seventh': '7', 'eighth': '8',
+                                        'ninth': '9', 'tenth': '10', 'eleventh': '11', 'twelfth': '12',
+                                        'thirteenth': '13', 'fourteenth': '14'}
+                            for w, n in ordinals.items():
+                                if w in description.lower():
+                                    seq = n
+                                    break
+                            if not seq:
+                                bm = re.search(r'[Bb]ook\s+(\d+)', description)
+                                if bm:
+                                    seq = bm.group(1)
+                            return candidate, seq
+    except Exception as e:
+        logger.debug("[Web-classify] Google Books error: %s", e)
+
+    return None, None
+
+
+def _fuzzy_title_match(query, candidate):
+    """Check if two titles are roughly the same book."""
+    import re
+    def normalize(t):
+        t = t.lower()
+        t = re.sub(r'[^a-z0-9\s]', '', t)
+        t = re.sub(r'\s+', ' ', t).strip()
+        return t
+    q = normalize(query)
+    c = normalize(candidate)
+    if q in c or c in q:
+        return True
+    q_words = set(q.split()) - {'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'for', 'and', 'or', 'book'}
+    c_words = set(c.split()) - {'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'for', 'and', 'or', 'book'}
+    if not q_words:
+        return False
+    overlap = len(q_words & c_words) / len(q_words)
+    return overlap >= 0.7
+
+
+def _auto_classify_series(title, author, media_type, logger):
+    """After a book is added, scan ABS for unclassified items and try to assign series.
+
+    Strategy:
+    1. Match by title pattern against known series in ABS (fast, local)
+    2. Look up series info from Open Library / Google Books APIs (slower, comprehensive)
+    """
+    try:
+        import config
+        if not config.has_audiobookshelf():
+            return
+
+        import requests, re, threading
+
+        def _classify_worker():
+            try:
+                abs_url = config.ABS_URL
+                token = config.ABS_TOKEN
+                headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+                lib_ids = []
+                if media_type in ("ebook", "novel"):
+                    if config.ABS_EBOOK_LIBRARY_ID:
+                        lib_ids.append(config.ABS_EBOOK_LIBRARY_ID)
+                elif media_type == "audiobook":
+                    if config.ABS_LIBRARY_ID:
+                        lib_ids.append(config.ABS_LIBRARY_ID)
+                else:
+                    if config.ABS_EBOOK_LIBRARY_ID:
+                        lib_ids.append(config.ABS_EBOOK_LIBRARY_ID)
+                    if config.ABS_LIBRARY_ID:
+                        lib_ids.append(config.ABS_LIBRARY_ID)
+
+                for lib_id in lib_ids:
+                    all_items = []
+                    page = 0
+                    while True:
+                        r = requests.get(
+                            f"{abs_url}/api/libraries/{lib_id}/items",
+                            params={"limit": 100, "page": page},
+                            headers=headers, timeout=15,
+                        )
+                        if r.status_code != 200:
+                            break
+                        results = r.json().get("results", [])
+                        all_items.extend(results)
+                        if len(results) < 100:
+                            break
+                        page += 1
+
+                    # Phase 1: Build series index from already-classified items
+                    known_series = {}  # series_name -> set of title keywords
+                    for item in all_items:
+                        iid = item["id"]
+                        full_r = requests.get(f"{abs_url}/api/items/{iid}", headers=headers, timeout=8)
+                        if full_r.status_code != 200:
+                            continue
+                        full = full_r.json()
+                        meta = full.get("media", {}).get("metadata", {})
+                        series_list = meta.get("series", [])
+                        item_title = meta.get("title", "")
+
+                        if series_list:
+                            sname = series_list[0].get("name", "")
+                            if sname:
+                                if sname not in known_series:
+                                    known_series[sname] = set()
+                                known_series[sname].add(item_title.lower())
+
+                    # Phase 2: Classify unclassified items
+                    for item in all_items:
+                        iid = item["id"]
+                        full_r = requests.get(f"{abs_url}/api/items/{iid}", headers=headers, timeout=8)
+                        if full_r.status_code != 200:
+                            continue
+                        full = full_r.json()
+                        meta = full.get("media", {}).get("metadata", {})
+                        series_list = meta.get("series", [])
+                        item_title = meta.get("title", "")
+                        item_author = meta.get("authorName", "")
+
+                        if series_list:
+                            continue
+                        if not item_title or item_title.lower() == "incoming":
+                            continue
+
+                        matched_series = None
+                        matched_seq = ""
+
+                        # Strategy A: Match against known series by title pattern
+                        for sname in known_series:
+                            pattern = re.search(
+                                rf'(?:\(|^|\s){re.escape(sname)}\s*(?:book\s*)?#?(\d+\.?\d*)(?:\)|$|\s)',
+                                item_title, re.IGNORECASE,
+                            )
+                            if pattern:
+                                matched_series = sname
+                                matched_seq = pattern.group(1)
+                                break
+                            pattern2 = re.search(
+                                rf'{re.escape(sname)}\s*(?:,\s*)?(?:book\s*)?#?(\d+\.?\d*)',
+                                item_title, re.IGNORECASE,
+                            )
+                            if pattern2:
+                                matched_series = sname
+                                matched_seq = pattern2.group(1)
+                                break
+
+                        # Strategy A2: Check filenames in item directory for book numbers
+                        if not matched_series and known_series:
+                            import subprocess, os
+                            item_path = full.get("path", "")
+                            if item_path:
+                                # Get files in the directory via ABS
+                                lib_files = full.get("libraryFiles", [])
+                                for lf in lib_files:
+                                    fname = lf.get("metadata", {}).get("filename", "")
+                                    for sname in known_series:
+                                        # Check filename for "Series Name N" pattern
+                                        pattern = re.search(
+                                            rf'{re.escape(sname)}\s*(?:book\s*)?#?(\d+\.?\d*)',
+                                            fname, re.IGNORECASE,
+                                        )
+                                        if pattern:
+                                            matched_series = sname
+                                            matched_seq = pattern.group(1)
+                                            break
+                                        # Check for just "N" when file is clearly part of the series author
+                                        if item_author:
+                                            auth_in_path = any(w.lower() in item_path.lower() for w in item_author.split()[:1])
+                                            sname_words = sname.lower().split()
+                                            title_has_series_words = sum(1 for w in sname_words if w in item_title.lower()) >= len(sname_words) * 0.5
+                                            if auth_in_path and title_has_series_words:
+                                                num_m = re.search(r'(\d+)', fname)
+                                                if num_m:
+                                                    matched_series = sname
+                                                    matched_seq = num_m.group(1)
+                                                    break
+                                    if matched_series:
+                                        break
+
+                        # Strategy B: Web lookup via Open Library / Google Books
+                        if not matched_series:
+                            web_series, web_seq = _lookup_series_from_web(
+                                item_title, item_author, logger,
+                            )
+                            if web_series:
+                                matched_series = web_series
+                                matched_seq = web_seq or ""
+                                logger.info(
+                                    "[Web-classify] Found: %s -> %s #%s",
+                                    item_title, web_series, web_seq,
+                                )
+
+                        if matched_series:
+                            payload = {"metadata": {
+                                "series": [{"name": matched_series, "sequence": matched_seq}],
+                            }}
+                            r = requests.patch(
+                                f"{abs_url}/api/items/{iid}/media",
+                                json=payload, headers=headers, timeout=10,
+                            )
+                            if r.status_code == 200:
+                                logger.info(
+                                    "[Auto-classify] %s -> %s #%s",
+                                    item_title, matched_series, matched_seq,
+                                )
+            except Exception as e:
+                logger.warning("[Auto-classify] Failed: %s", e)
+
+        threading.Thread(target=_classify_worker, daemon=True).start()
+    except Exception as e:
+        logger.warning("[Auto-classify] Setup failed: %s", e)
+
 
 
 def run_pipeline(file_path, title="", author="", media_type="ebook",
@@ -281,5 +762,9 @@ def run_pipeline(file_path, title="", author="", media_type="ebook",
             library_item_id=item_id, job_id=job_id,
         )
         result["tracked"] = True
+
+    # Clean up ABS duplicates and stale covers, then auto-classify
+    _cleanup_abs_after_import(title, media_type, logger)
+    _auto_classify_series(title, author, media_type, logger)
 
     return result

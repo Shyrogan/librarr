@@ -4,6 +4,28 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
+import unicodedata as _unicodedata
+
+_FOREIGN_KW = frozenset(['norwegian','deutsch','german','french','francais','spanish','espanol',
+    'italian','italiano','portuguese','russian','chinese','korean',
+    'arabic','hindi','turkish','polish','dutch','swedish','danish','finnish',
+    'czech','hungarian','romanian','thai','vietnamese','indonesian','malay'])
+
+def _is_foreign_title(title):
+    t = title.lower()
+    if any(kw in t for kw in _FOREIGN_KW):
+        return True
+    non_latin = 0
+    total = 0
+    for ch in title:
+        if ch.isalpha():
+            total += 1
+            name = _unicodedata.name(ch, '')
+            if any(s in name for s in ('CYRILLIC', 'ARABIC', 'THAI', 'DEVANAGARI', 'BENGALI')):
+                non_latin += 1
+    return total > 0 and non_latin / total > 0.3
+
+
 class ProviderSearchService:
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
@@ -49,9 +71,11 @@ class ProviderSearchService:
                     "limit": 50,
                 },
                 headers={"X-Api-Key": self.config.PROWLARR_API_KEY},
-                timeout=30,
+                timeout=60,
             )
             for item in resp.json():
+                if _is_foreign_title(item.get("title", "")):
+                    continue
                 size = item.get("size", 0)
                 results.append({
                     "source": "torrent",
@@ -85,7 +109,7 @@ class ProviderSearchService:
                     f"{self.config.PROWLARR_URL}/api/v1/search",
                     params=params,
                     headers={"X-Api-Key": self.config.PROWLARR_API_KEY},
-                    timeout=30,
+                    timeout=60,
                 )
                 for item in resp.json():
                     ih = item.get("infoHash", "")
@@ -94,6 +118,8 @@ class ProviderSearchService:
                     if ih:
                         seen_hashes.add(ih)
                     size = item.get("size", 0)
+                    if _is_foreign_title(item.get("title", "")):
+                        continue
                     results.append({
                         "source": "audiobook",
                         "title": item.get("title", ""),
@@ -127,7 +153,7 @@ class ProviderSearchService:
                     f"{self.config.PROWLARR_URL}/api/v1/search",
                     params=params,
                     headers={"X-Api-Key": self.config.PROWLARR_API_KEY},
-                    timeout=30,
+                    timeout=60,
                 )
                 for item in resp.json():
                     ih = item.get("infoHash", "")
@@ -136,6 +162,8 @@ class ProviderSearchService:
                     if ih:
                         seen_hashes.add(ih)
                     size = item.get("size", 0)
+                    if _is_foreign_title(item.get("title", "")):
+                        continue
                     results.append({
                         "source": "prowlarr_manga",
                         "title": item.get("title", ""),
@@ -260,72 +288,80 @@ class ProviderSearchService:
 
     def search_annas_archive(self, query):
         results = []
-        try:
-            resp = self.requests.get(
-                "https://annas-archive.li/search",
-                params={"q": query, "ext": "epub"},
-                headers={"User-Agent": self.USER_AGENT},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                return results
-
-            html = resp.text
-            blocks = re.findall(
-                r'<div class="flex\s+pt-3 pb-3 border-b.*?">(.*?)(?=<div class="flex\s+pt-3 pb-3 border-b|<footer)',
-                html,
-                re.DOTALL,
-            )
-            candidates = []
-            for block in blocks[:20]:
-                md5 = re.search(r"/md5/([a-f0-9]+)", block)
-                if not md5:
+        seen_md5 = set()
+        # Search multiple variations to find complete editions
+        for search_q, search_ext in [(query, "epub"), (query, ""), (query + " all", "epub")]:
+            try:
+                resp = self.requests.get(
+                    "https://annas-archive.gd/search",
+                    params={"q": search_q, "ext": search_ext} if search_ext else {"q": search_q},
+                    headers={"User-Agent": self.USER_AGENT},
+                    timeout=15,
+                )
+                if resp.status_code != 200:
                     continue
-                title_m = re.search(r"font-semibold text-lg[^>]*>(.*?)</a>", block, re.DOTALL)
-                author_m = re.search(r"user-edit[^>]*></span>\s*(.*?)</a>", block, re.DOTALL)
-                size = ""
-                size_m = re.search(r"(\d+[\.\d]*\s*[KMG]i?B)", block)
-                if size_m:
-                    size = size_m.group(1)
 
-                title = re.sub(r"<[^>]+>", "", title_m.group(1)).strip() if title_m else ""
-                author = re.sub(r"<[^>]+>", "", author_m.group(1)).strip() if author_m else ""
-                if not title:
-                    continue
-                candidates.append({
-                    "source": "annas",
-                    "title": title,
-                    "author": author,
-                    "size_human": size,
-                    "md5": md5.group(1),
-                    "url": f"https://annas-archive.li/md5/{md5.group(1)}",
-                })
+                html = resp.text
+                blocks = re.findall(
+                    r'<div class="flex\s+pt-3 pb-3 border-b.*?">(.*?)(?=<div class="flex\s+pt-3 pb-3 border-b|<footer)',
+                    html,
+                    re.DOTALL,
+                )
+                candidates = []
+                for block in blocks[:50]:
+                    md5 = re.search(r"/md5/([a-f0-9]+)", block)
+                    if not md5:
+                        continue
+                    if md5.group(1) in seen_md5:
+                        continue
+                    seen_md5.add(md5.group(1))
+                    title_m = re.search(r"font-semibold text-lg[^>]*>(.*?)</a>", block, re.DOTALL)
+                    author_m = re.search(r"user-edit[^>]*></span>\s*(.*?)</a>", block, re.DOTALL)
+                    size = ""
+                    size_m = re.search(r"(\d+[\.\d]*\s*[KMG]i?B)", block)
+                    if size_m:
+                        size = size_m.group(1)
 
-            def _parse_size_bytes(s):
-                if not s:
-                    return 0
-                m = re.match(r"([\d.]+)\s*(GB|MB|KB|B)", s.strip(), re.IGNORECASE)
-                if not m:
-                    return 0
-                val = float(m.group(1))
-                unit = m.group(2).upper()
-                return val * {"GB": 1e9, "MB": 1e6, "KB": 1e3, "B": 1}.get(unit, 1)
+                    title = re.sub(r"<[^>]+>", "", title_m.group(1)).strip() if title_m else ""
+                    author = re.sub(r"<[^>]+>", "", author_m.group(1)).strip() if author_m else ""
+                    if not title:
+                        continue
+                    candidates.append({
+                        "source": "annas",
+                        "title": title,
+                        "author": author,
+                        "size_human": size,
+                        "md5": md5.group(1),
+                        "url": f"https://annas-archive.gd/md5/{md5.group(1)}",
+                    })
 
-            candidates.sort(key=lambda c: _parse_size_bytes(c.get("size_human", "")), reverse=True)
+                def _parse_size_bytes(s):
+                    if not s:
+                        return 0
+                    m = re.match(r"([\d.]+)\s*(GB|MB|KB|B)", s.strip(), re.IGNORECASE)
+                    if not m:
+                        return 0
+                    val = float(m.group(1))
+                    unit = m.group(2).upper()
+                    return val * {"GB": 1e9, "MB": 1e6, "KB": 1e3, "B": 1}.get(unit, 1)
 
-            if candidates:
-                to_check = candidates[:20]
-                with ThreadPoolExecutor(max_workers=8) as executor:
-                    futures = {executor.submit(self.check_libgen_available, c["md5"]): c for c in to_check}
-                    for future in as_completed(futures, timeout=45):
-                        try:
-                            if future.result():
-                                results.append(futures[future])
-                        except Exception:
-                            pass
-                results.sort(key=lambda c: _parse_size_bytes(c.get("size_human", "")), reverse=True)
-                if not results:
-                    self.logger.info("Anna's Archive: all %s candidates for '%s' are dead on libgen", len(to_check), query)
-        except Exception as e:
-            self.logger.error("Anna's Archive search failed: %s", e)
+                candidates.sort(key=lambda c: _parse_size_bytes(c.get("size_human", "")), reverse=True)
+
+                if candidates:
+                    # Skip libgen pre-check (wastes rate limit, blocks actual downloads)
+                    results.extend(candidates[:50])
+                    to_check = []  # disabled
+                    with ThreadPoolExecutor(max_workers=8) as executor:
+                        futures = {executor.submit(self.check_libgen_available, c["md5"]): c for c in to_check}
+                        for future in as_completed(futures, timeout=45):
+                            try:
+                                if future.result():
+                                    results.append(futures[future])
+                            except Exception:
+                                pass
+                    results.sort(key=lambda c: _parse_size_bytes(c.get("size_human", "")), reverse=True)
+                    if not results:
+                        self.logger.info("Anna's Archive: all %s candidates for '%s' are dead on libgen", len(to_check), query)
+            except Exception as e:
+                self.logger.error("Anna's Archive search failed: %s", e)
         return results

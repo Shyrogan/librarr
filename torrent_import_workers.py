@@ -156,11 +156,15 @@ class TorrentImportWorkers:
                     save_path = self.config.MANGA_INCOMING_DIR + save_path[len(qb_manga_path):]
 
                 manga_files = []
-                for ext in ("*.cbz", "*.cbr", "*.zip", "*.pdf"):
+                for ext in ("*.cbz", "*.cbr", "*.zip", "*.pdf", "*.epub"):
                     if os.path.isdir(save_path):
                         manga_files.extend(glob.glob(os.path.join(save_path, "**", ext), recursive=True))
                     elif save_path.lower().endswith(ext[1:]):
                         manga_files.append(save_path)
+
+                if not manga_files:
+                    self.logger.warning("No manga files found for torrent: %s (path=%s)", t.get("name", ""), save_path)
+                    continue
 
                 for mf in manga_files:
                     self.pipeline.run_pipeline(

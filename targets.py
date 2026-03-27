@@ -46,6 +46,7 @@ class CalibreTarget:
                     "docker", "exec", config.CALIBRE_CONTAINER,
                     "calibredb", "add", container_path,
                     "--library-path", config.CALIBRE_LIBRARY_CONTAINER,
+                    "--automerge", "overwrite",
                 ],
                 capture_output=True, text=True, timeout=120,
             )

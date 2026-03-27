@@ -356,7 +356,7 @@ def test_qb_test_connection_classifies_timeout(monkeypatch):
             raise librarr_app.requests.Timeout("boom")
 
     monkeypatch.setattr(librarr_app.requests, "Session", lambda: FakeSession())
-    result = librarr_app._test_qbittorrent_connection("http://qb:8080", "jam", "1301")
+    result = librarr_app._test_qbittorrent_connection("http://qb:8080", "testuser", "testpass")
     assert result["success"] is False
     assert result["error_class"] == "timeout"
 
@@ -412,8 +412,8 @@ def test_settings_export_and_backup_endpoints(client):
 
     # Seed some values so export payload is meaningful.
     r = client.post("/api/settings", json={
-        "qb_user": "jam",
-        "qb_pass": "1301",
+        "qb_user": "testuser",
+        "qb_pass": "testpass",
         "prowlarr_api_key": "prow-key",
     })
     assert r.status_code == 200
@@ -423,7 +423,7 @@ def test_settings_export_and_backup_endpoints(client):
     data = r.get_json()
     assert "file_settings" in data
     assert "effective_settings" in data
-    assert data["effective_settings"]["qb_user"] == "jam"
+    assert data["effective_settings"]["qb_user"] == "testuser"
     assert data["effective_settings"]["qb_pass"]
 
     r = client.get("/api/backup/export")

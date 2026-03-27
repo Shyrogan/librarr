@@ -22,8 +22,8 @@ class _FakeSession:
 def test_qb_client_unreachable_login_sets_backoff(monkeypatch):
     monkeypatch.setattr(qb_client.config, "has_qbittorrent", lambda: True)
     monkeypatch.setattr(qb_client.config, "QB_URL", "http://qb:8080", raising=False)
-    monkeypatch.setattr(qb_client.config, "QB_USER", "jam", raising=False)
-    monkeypatch.setattr(qb_client.config, "QB_PASS", "1301", raising=False)
+    monkeypatch.setattr(qb_client.config, "QB_USER", "testuser", raising=False)
+    monkeypatch.setattr(qb_client.config, "QB_PASS", "testpass", raising=False)
 
     client = qb_client.QBittorrentClient()
     client.session = _FakeSession(exc=qb_client.requests.ConnectionError("down"))
@@ -43,8 +43,8 @@ def test_qb_client_unreachable_login_sets_backoff(monkeypatch):
 def test_qb_client_add_torrent_short_circuits_during_backoff(monkeypatch):
     monkeypatch.setattr(qb_client.config, "has_qbittorrent", lambda: True)
     monkeypatch.setattr(qb_client.config, "QB_URL", "http://qb:8080", raising=False)
-    monkeypatch.setattr(qb_client.config, "QB_USER", "jam", raising=False)
-    monkeypatch.setattr(qb_client.config, "QB_PASS", "1301", raising=False)
+    monkeypatch.setattr(qb_client.config, "QB_USER", "testuser", raising=False)
+    monkeypatch.setattr(qb_client.config, "QB_PASS", "testpass", raising=False)
 
     client = qb_client.QBittorrentClient()
     client.session = _FakeSession(exc=qb_client.requests.ConnectionError("down"))
