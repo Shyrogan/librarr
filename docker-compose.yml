@@ -1,26 +1,20 @@
-# =============================================================================
-# Librarr — Docker Compose
-# Adjust volume paths to match your storage layout.
-# =============================================================================
-
 services:
   librarr:
     build: .
     container_name: librarr
     restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "5050:5050"
+    volumes:
+      - librarr-data:/data
+      - /data/media/books/ebooks:/books/ebooks
+      - /data/media/books/audiobooks:/books/audiobooks
+      - /data/media/books/manga:/books/manga
     env_file:
       - .env
-    volumes:
-      # Book storage — adjust these paths to your setup
-      - /your/books/ebooks:/data/books/ebooks
-      - /your/books/audiobooks:/data/books/audiobooks
-      # Librarr database and settings (persisted across restarts)
-      - librarr_data:/data/librarr
-      # Required only if using Calibre-Web or lightnovel-crawler integration:
-      # - /var/run/docker.sock:/var/run/docker.sock:ro
-      # - /usr/bin/docker:/usr/bin/docker:ro
+    environment:
+      - LIBRARR_PORT=5050
+      - LIBRARR_DB_PATH=/data/librarr.db
 
 volumes:
-  librarr_data:
+  librarr-data:

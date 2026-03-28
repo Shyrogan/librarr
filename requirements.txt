@@ -1,4 +1,0 @@
-flask>=3.0
-requests>=2.31
-mutagen>=1.47.0
-gunicorn>=22.0

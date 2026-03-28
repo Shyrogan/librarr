@@ -1,0 +1,1384 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Librarr</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+      colors: {
+        slate: {
+          850: '#172033',
+          950: '#0b1120',
+        }
+      }
+    }
+  }
+}
+</script>
+<style>
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #0f172a; }
+  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+  /* Tab transitions */
+  .tab-content { display: none; animation: fadeIn 0.2s ease-out; }
+  .tab-content.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* Card hover */
+  .book-card { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+  .book-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
+
+  /* Skeleton shimmer */
+  .skeleton { background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+  /* Toast animation */
+  .toast-enter { animation: toastIn 0.3s ease-out; }
+  .toast-exit { animation: toastOut 0.3s ease-in forwards; }
+  @keyframes toastIn { from { opacity: 0; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes toastOut { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(100%); } }
+
+  /* Progress bar */
+  .progress-bar { transition: width 0.5s ease; }
+
+  /* Active nav indicator */
+  .nav-tab.active { border-color: #6366f1; color: #e0e7ff; }
+  .sub-tab.active { background: #312e81; color: #c7d2fe; }
+
+  /* Cover placeholder gradients */
+  .cover-placeholder { display: flex; align-items: center; justify-content: center; font-size: 2rem; font-weight: 700; color: rgba(255,255,255,0.7); }
+
+  /* Login modal backdrop */
+  .modal-backdrop { background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); }
+
+  /* Spin animation for loading */
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+  /* Download button pulse */
+  .dl-active { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-200 font-sans min-h-screen">
+
+<!-- Toast Container -->
+<div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm"></div>
+
+<!-- Login Modal -->
+<div id="login-modal" class="fixed inset-0 z-40 modal-backdrop hidden items-center justify-center">
+  <div class="bg-slate-900 border border-slate-700 rounded-xl p-8 w-full max-w-md mx-4 shadow-2xl">
+    <div class="flex items-center gap-3 mb-6">
+      <div class="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center">
+        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+      </div>
+      <div>
+        <h2 class="text-xl font-bold text-white">Librarr</h2>
+        <p class="text-sm text-slate-400">Sign in to continue</p>
+      </div>
+    </div>
+    <form id="login-form" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-300 mb-1">Username</label>
+        <input type="text" id="login-username" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" placeholder="Username" autocomplete="username">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-300 mb-1">Password</label>
+        <input type="password" id="login-password" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" placeholder="Password" autocomplete="current-password">
+      </div>
+      <div id="login-error" class="text-red-400 text-sm hidden"></div>
+      <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-lg transition-colors">
+        Sign In
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- Main App -->
+<div id="app" class="min-h-screen flex flex-col">
+
+  <!-- Header -->
+  <header class="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-white leading-tight">Librarr</h1>
+          <p class="text-xs text-slate-400 hidden sm:block">Self-hosted book manager</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="header-stats" class="text-xs text-slate-500 hidden sm:block"></span>
+        <button onclick="switchTab('settings')" class="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors" title="Settings">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Nav Tabs -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6">
+      <nav class="flex gap-1 -mb-px overflow-x-auto" id="main-nav">
+        <button onclick="switchTab('search')" class="nav-tab active px-4 py-2.5 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap" data-tab="search">
+          <svg class="w-4 h-4 inline mr-1.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>Search
+        </button>
+        <button onclick="switchTab('library')" class="nav-tab px-4 py-2.5 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap" data-tab="library">
+          <svg class="w-4 h-4 inline mr-1.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z"/></svg>Library
+        </button>
+        <button onclick="switchTab('downloads')" class="nav-tab px-4 py-2.5 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap relative" data-tab="downloads">
+          <svg class="w-4 h-4 inline mr-1.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>Downloads
+          <span id="dl-badge" class="hidden ml-1 px-1.5 py-0.5 text-xs bg-indigo-600 text-white rounded-full"></span>
+        </button>
+        <button onclick="switchTab('wishlist')" class="nav-tab px-4 py-2.5 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap" data-tab="wishlist">
+          <svg class="w-4 h-4 inline mr-1.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>Wishlist
+        </button>
+        <button onclick="switchTab('settings')" class="nav-tab px-4 py-2.5 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors whitespace-nowrap" data-tab="settings">
+          <svg class="w-4 h-4 inline mr-1.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>Settings
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+
+    <!-- ==================== SEARCH TAB ==================== -->
+    <div id="tab-search" class="tab-content active">
+      <!-- Sub-tabs -->
+      <div class="flex gap-2 mb-4">
+        <button onclick="switchSearchTab('ebooks')" class="sub-tab active px-4 py-1.5 text-sm font-medium rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors" data-stab="ebooks">Ebooks</button>
+        <button onclick="switchSearchTab('audiobooks')" class="sub-tab px-4 py-1.5 text-sm font-medium rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors" data-stab="audiobooks">Audiobooks</button>
+        <button onclick="switchSearchTab('manga')" class="sub-tab px-4 py-1.5 text-sm font-medium rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors" data-stab="manga">Manga</button>
+      </div>
+
+      <!-- Search Bar -->
+      <div class="relative mb-6">
+        <svg class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <input type="text" id="search-input" class="w-full bg-slate-900 border border-slate-700 rounded-xl pl-12 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-base" placeholder="Search for books...">
+        <div id="search-spinner" class="absolute right-4 top-1/2 -translate-y-1/2 hidden">
+          <svg class="w-5 h-5 text-indigo-400 spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+        </div>
+      </div>
+
+      <!-- Sort bar -->
+      <div id="search-sort-bar" class="hidden flex items-center justify-between mb-4">
+        <span id="search-result-count" class="text-sm text-slate-400"></span>
+        <div class="flex gap-2">
+          <button onclick="setSortMode('relevance')" class="sort-btn text-xs px-3 py-1 rounded-md bg-indigo-600 text-white" data-sort="relevance">Relevance</button>
+          <button onclick="setSortMode('seeders')" class="sort-btn text-xs px-3 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-white" data-sort="seeders">Seeders</button>
+          <button onclick="setSortMode('size')" class="sort-btn text-xs px-3 py-1 rounded-md bg-slate-800 text-slate-400 hover:text-white" data-sort="size">Size</button>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div id="search-results" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4"></div>
+
+      <!-- Skeleton loading -->
+      <div id="search-skeleton" class="hidden grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+        <!-- Generated by JS -->
+      </div>
+
+      <!-- Empty state -->
+      <div id="search-empty" class="hidden text-center py-20">
+        <svg class="w-16 h-16 mx-auto text-slate-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <p class="text-slate-400 text-lg mb-1">Search for your next read</p>
+        <p class="text-slate-600 text-sm">Try searching by title, author, or ISBN</p>
+      </div>
+
+      <!-- No results state -->
+      <div id="search-no-results" class="hidden text-center py-20">
+        <svg class="w-16 h-16 mx-auto text-slate-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M12 2a10 10 0 110 20 10 10 0 010-20z"/></svg>
+        <p class="text-slate-400 text-lg mb-1">No results found</p>
+        <p class="text-slate-600 text-sm">Try different keywords or check your spelling</p>
+      </div>
+    </div>
+
+    <!-- ==================== LIBRARY TAB ==================== -->
+    <div id="tab-library" class="tab-content">
+      <!-- Sub-tabs -->
+      <div class="flex gap-2 mb-4">
+        <button onclick="switchLibraryTab('ebooks')" class="lib-tab active px-4 py-1.5 text-sm font-medium rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors" data-ltab="ebooks">Ebooks</button>
+        <button onclick="switchLibraryTab('audiobooks')" class="lib-tab px-4 py-1.5 text-sm font-medium rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors" data-ltab="audiobooks">Audiobooks</button>
+        <button onclick="switchLibraryTab('manga')" class="lib-tab px-4 py-1.5 text-sm font-medium rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors" data-ltab="manga">Manga</button>
+      </div>
+
+      <!-- Library search -->
+      <div class="relative mb-6">
+        <svg class="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <input type="text" id="library-search" class="w-full bg-slate-900 border border-slate-700 rounded-xl pl-12 pr-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" placeholder="Filter library...">
+      </div>
+
+      <div id="library-results" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4"></div>
+
+      <!-- Library pagination -->
+      <div id="library-pagination" class="hidden flex items-center justify-center gap-2 mt-8"></div>
+
+      <!-- Library empty -->
+      <div id="library-empty" class="hidden text-center py-20">
+        <svg class="w-16 h-16 mx-auto text-slate-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z"/></svg>
+        <p class="text-slate-400 text-lg mb-1">Your library is empty</p>
+        <p class="text-slate-600 text-sm">Download some books to get started</p>
+      </div>
+    </div>
+
+    <!-- ==================== DOWNLOADS TAB ==================== -->
+    <div id="tab-downloads" class="tab-content">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-lg font-semibold text-white">Downloads</h2>
+        <div class="flex gap-2">
+          <button onclick="refreshDownloads()" class="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            Refresh
+          </button>
+          <button onclick="clearCompleted()" class="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors">Clear Completed</button>
+        </div>
+      </div>
+
+      <div id="downloads-list" class="space-y-3"></div>
+
+      <div id="downloads-empty" class="hidden text-center py-20">
+        <svg class="w-16 h-16 mx-auto text-slate-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+        <p class="text-slate-400 text-lg mb-1">No active downloads</p>
+        <p class="text-slate-600 text-sm">Search for books and click download to get started</p>
+      </div>
+    </div>
+
+    <!-- ==================== WISHLIST TAB ==================== -->
+    <div id="tab-wishlist" class="tab-content">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-lg font-semibold text-white">Wishlist</h2>
+        <button onclick="showWishlistForm()" class="px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          Add Book
+        </button>
+      </div>
+
+      <!-- Add wishlist form (hidden by default) -->
+      <div id="wishlist-form" class="hidden bg-slate-900 border border-slate-700 rounded-xl p-4 mb-6">
+        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <input type="text" id="wl-title" class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 sm:col-span-1" placeholder="Title">
+          <input type="text" id="wl-author" class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500" placeholder="Author (optional)">
+          <select id="wl-type" class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-indigo-500">
+            <option value="ebook">Ebook</option>
+            <option value="audiobook">Audiobook</option>
+            <option value="manga">Manga</option>
+          </select>
+          <div class="flex gap-2">
+            <button onclick="addWishlistItem()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2 rounded-lg transition-colors">Add</button>
+            <button onclick="hideWishlistForm()" class="px-3 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg transition-colors">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="wishlist-list" class="space-y-2"></div>
+
+      <div id="wishlist-empty" class="hidden text-center py-20">
+        <svg class="w-16 h-16 mx-auto text-slate-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+        <p class="text-slate-400 text-lg mb-1">Wishlist is empty</p>
+        <p class="text-slate-600 text-sm">Add books you want to find later</p>
+      </div>
+    </div>
+
+    <!-- ==================== SETTINGS TAB ==================== -->
+    <div id="tab-settings" class="tab-content">
+      <h2 class="text-lg font-semibold text-white mb-6">Settings</h2>
+
+      <!-- Connection Tests -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 mb-6">
+        <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Connection Tests</h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" id="connection-tests">
+          <div class="flex items-center justify-between bg-slate-800/50 rounded-lg px-4 py-3">
+            <span class="text-sm text-slate-300">Prowlarr</span>
+            <div class="flex items-center gap-2">
+              <span id="test-prowlarr-status" class="text-xs text-slate-500">Not tested</span>
+              <button onclick="testConnection('prowlarr')" class="px-2.5 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors">Test</button>
+            </div>
+          </div>
+          <div class="flex items-center justify-between bg-slate-800/50 rounded-lg px-4 py-3">
+            <span class="text-sm text-slate-300">qBittorrent</span>
+            <div class="flex items-center gap-2">
+              <span id="test-qbittorrent-status" class="text-xs text-slate-500">Not tested</span>
+              <button onclick="testConnection('qbittorrent')" class="px-2.5 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors">Test</button>
+            </div>
+          </div>
+          <div class="flex items-center justify-between bg-slate-800/50 rounded-lg px-4 py-3">
+            <span class="text-sm text-slate-300">SABnzbd</span>
+            <div class="flex items-center gap-2">
+              <span id="test-sabnzbd-status" class="text-xs text-slate-500">Not tested</span>
+              <button onclick="testConnection('sabnzbd')" class="px-2.5 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors">Test</button>
+            </div>
+          </div>
+          <div class="flex items-center justify-between bg-slate-800/50 rounded-lg px-4 py-3">
+            <span class="text-sm text-slate-300">Audiobookshelf</span>
+            <div class="flex items-center gap-2">
+              <span id="test-audiobookshelf-status" class="text-xs text-slate-500">Not tested</span>
+              <button onclick="testConnection('audiobookshelf')" class="px-2.5 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors">Test</button>
+            </div>
+          </div>
+          <div class="flex items-center justify-between bg-slate-800/50 rounded-lg px-4 py-3">
+            <span class="text-sm text-slate-300">Kavita</span>
+            <div class="flex items-center gap-2">
+              <span id="test-kavita-status" class="text-xs text-slate-500">Not tested</span>
+              <button onclick="testConnection('kavita')" class="px-2.5 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors">Test</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sources -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 mb-6">
+        <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Search Sources</h3>
+        <div id="sources-list" class="space-y-2"></div>
+        <div id="sources-loading" class="text-center py-4 text-slate-500 text-sm">Loading sources...</div>
+      </div>
+
+      <!-- Config Info -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <h3 class="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4">Configuration</h3>
+        <div id="config-info" class="space-y-2 text-sm text-slate-400">Loading...</div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// ============================================================
+// STATE
+// ============================================================
+const state = {
+  currentTab: 'search',
+  searchTab: 'ebooks',
+  libraryTab: 'ebooks',
+  searchResults: [],
+  sortMode: 'relevance',
+  libraryPage: 1,
+  libraryPages: 1,
+  config: null,
+  downloadPollTimer: null,
+};
+
+const SOURCE_COLORS = {
+  annas:           { bg: '#7c3aed', text: 'white', label: "Anna's Archive" },
+  torrent:         { bg: '#2563eb', text: 'white', label: 'Prowlarr' },
+  prowlarr_manga:  { bg: '#2563eb', text: 'white', label: 'Prowlarr' },
+  audiobook:       { bg: '#2563eb', text: 'white', label: 'Prowlarr' },
+  audiobookbay:    { bg: '#059669', text: 'white', label: 'AudioBookBay' },
+  gutenberg:       { bg: '#d97706', text: 'white', label: 'Gutenberg' },
+  openlibrary:     { bg: '#dc2626', text: 'white', label: 'Open Library' },
+  standardebooks:  { bg: '#0891b2', text: 'white', label: 'Standard Ebooks' },
+  librivox:        { bg: '#7c3aed', text: 'white', label: 'Librivox' },
+  mangadex:        { bg: '#ff6740', text: 'white', label: 'MangaDex' },
+  nyaa_manga:      { bg: '#16a34a', text: 'white', label: 'Nyaa' },
+  annas_manga:     { bg: '#7c3aed', text: 'white', label: "Anna's Manga" },
+  webnovel:        { bg: '#6366f1', text: 'white', label: 'Web Novel' },
+};
+
+const COVER_GRADIENTS = [
+  'from-indigo-600 to-purple-700',
+  'from-blue-600 to-cyan-700',
+  'from-emerald-600 to-teal-700',
+  'from-rose-600 to-pink-700',
+  'from-amber-600 to-orange-700',
+  'from-violet-600 to-fuchsia-700',
+  'from-sky-600 to-blue-700',
+  'from-lime-600 to-green-700',
+];
+
+const STATUS_STYLES = {
+  downloading: { bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30', label: 'Downloading' },
+  completed:   { bg: 'bg-emerald-500/20', text: 'text-emerald-400', border: 'border-emerald-500/30', label: 'Completed' },
+  error:       { bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30', label: 'Error' },
+  organizing:  { bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30', label: 'Organizing' },
+  dead_letter: { bg: 'bg-slate-500/20', text: 'text-slate-400', border: 'border-slate-500/30', label: 'Dead Letter' },
+  queued:      { bg: 'bg-slate-500/20', text: 'text-slate-400', border: 'border-slate-500/30', label: 'Queued' },
+  searching:   { bg: 'bg-indigo-500/20', text: 'text-indigo-400', border: 'border-indigo-500/30', label: 'Searching' },
+  importing:   { bg: 'bg-purple-500/20', text: 'text-purple-400', border: 'border-purple-500/30', label: 'Importing' },
+};
+
+// ============================================================
+// API HELPERS
+// ============================================================
+function getApiKey() {
+  return localStorage.getItem('librarr_apikey') || '';
+}
+
+async function api(path, options = {}) {
+  const url = new URL(path, window.location.origin);
+  const key = getApiKey();
+  if (key) url.searchParams.set('apikey', key);
+
+  const resp = await fetch(url.toString(), {
+    credentials: 'include',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+
+  if (resp.status === 401) {
+    showLoginModal();
+    throw new Error('Unauthorized');
+  }
+
+  return resp;
+}
+
+async function apiJson(path, options = {}) {
+  const resp = await api(path, options);
+  if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+  return resp.json();
+}
+
+// ============================================================
+// TOAST NOTIFICATIONS
+// ============================================================
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const colors = {
+    info: 'bg-slate-800 border-slate-600',
+    success: 'bg-emerald-900/80 border-emerald-600/50',
+    error: 'bg-red-900/80 border-red-600/50',
+    warning: 'bg-yellow-900/80 border-yellow-600/50',
+  };
+  const icons = {
+    info: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+    success: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+    error: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+    warning: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>',
+  };
+  const iconColors = { info: 'text-slate-400', success: 'text-emerald-400', error: 'text-red-400', warning: 'text-yellow-400' };
+
+  const el = document.createElement('div');
+  el.className = `toast-enter ${colors[type]} border rounded-lg px-4 py-3 shadow-xl flex items-start gap-3`;
+  el.innerHTML = `
+    <svg class="w-5 h-5 ${iconColors[type]} flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons[type]}</svg>
+    <p class="text-sm text-slate-200 flex-1">${escapeHtml(message)}</p>
+    <button class="text-slate-500 hover:text-slate-300 flex-shrink-0" onclick="this.parentElement.remove()">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    </button>
+  `;
+  container.appendChild(el);
+
+  setTimeout(() => {
+    el.classList.remove('toast-enter');
+    el.classList.add('toast-exit');
+    setTimeout(() => el.remove(), 300);
+  }, 4000);
+}
+
+// ============================================================
+// LOGIN
+// ============================================================
+function showLoginModal() {
+  document.getElementById('login-modal').classList.remove('hidden');
+  document.getElementById('login-modal').classList.add('flex');
+  document.getElementById('login-username').focus();
+}
+
+function hideLoginModal() {
+  document.getElementById('login-modal').classList.add('hidden');
+  document.getElementById('login-modal').classList.remove('flex');
+}
+
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('login-error');
+  errEl.classList.add('hidden');
+
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+
+  if (!username || !password) {
+    errEl.textContent = 'Username and password are required';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  try {
+    const resp = await fetch('/api/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (resp.ok) {
+      hideLoginModal();
+      init();
+      showToast('Signed in successfully', 'success');
+    } else {
+      const data = await resp.json().catch(() => ({}));
+      errEl.textContent = data.error || 'Invalid credentials';
+      errEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    errEl.textContent = 'Connection error';
+    errEl.classList.remove('hidden');
+  }
+});
+
+// ============================================================
+// TAB NAVIGATION
+// ============================================================
+function switchTab(tab) {
+  state.currentTab = tab;
+
+  // Update nav
+  document.querySelectorAll('.nav-tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.tab === tab);
+  });
+
+  // Update content
+  document.querySelectorAll('.tab-content').forEach(el => {
+    el.classList.toggle('active', el.id === `tab-${tab}`);
+  });
+
+  // Load data for the tab
+  if (tab === 'library') loadLibrary();
+  if (tab === 'downloads') { refreshDownloads(); startDownloadPolling(); }
+  else stopDownloadPolling();
+  if (tab === 'wishlist') loadWishlist();
+  if (tab === 'settings') loadSettings();
+}
+
+function switchSearchTab(tab) {
+  state.searchTab = tab;
+  document.querySelectorAll('.sub-tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.stab === tab);
+  });
+  // Clear results when switching
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('search-sort-bar').classList.add('hidden');
+  document.getElementById('search-no-results').classList.add('hidden');
+  document.getElementById('search-empty').classList.remove('hidden');
+  state.searchResults = [];
+
+  // Update placeholder
+  const placeholders = { ebooks: 'Search for books...', audiobooks: 'Search for audiobooks...', manga: 'Search for manga...' };
+  document.getElementById('search-input').placeholder = placeholders[tab] || 'Search...';
+  document.getElementById('search-input').value = '';
+}
+
+function switchLibraryTab(tab) {
+  state.libraryTab = tab;
+  state.libraryPage = 1;
+  document.querySelectorAll('.lib-tab').forEach(el => {
+    el.classList.toggle('active', el.dataset.ltab === tab);
+  });
+  loadLibrary();
+}
+
+// ============================================================
+// SEARCH
+// ============================================================
+let searchTimeout = null;
+
+document.getElementById('search-input').addEventListener('input', (e) => {
+  clearTimeout(searchTimeout);
+  const q = e.target.value.trim();
+  if (q.length < 2) return;
+  searchTimeout = setTimeout(() => doSearch(q), 400);
+});
+
+document.getElementById('search-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    clearTimeout(searchTimeout);
+    const q = e.target.value.trim();
+    if (q.length >= 1) doSearch(q);
+  }
+});
+
+async function doSearch(query) {
+  const endpoints = { ebooks: '/api/search', audiobooks: '/api/search/audiobooks', manga: '/api/search/manga' };
+  const endpoint = endpoints[state.searchTab] || '/api/search';
+
+  // Show skeleton
+  showSearchSkeleton();
+  document.getElementById('search-results').innerHTML = '';
+  document.getElementById('search-empty').classList.add('hidden');
+  document.getElementById('search-no-results').classList.add('hidden');
+  document.getElementById('search-spinner').classList.remove('hidden');
+
+  try {
+    const data = await apiJson(`${endpoint}?q=${encodeURIComponent(query)}`);
+    state.searchResults = data.results || [];
+    document.getElementById('search-spinner').classList.add('hidden');
+    hideSearchSkeleton();
+
+    if (state.searchResults.length === 0) {
+      document.getElementById('search-no-results').classList.remove('hidden');
+      document.getElementById('search-sort-bar').classList.add('hidden');
+    } else {
+      document.getElementById('search-sort-bar').classList.remove('hidden');
+      document.getElementById('search-result-count').textContent = `${state.searchResults.length} results`;
+      renderSearchResults();
+    }
+  } catch (err) {
+    document.getElementById('search-spinner').classList.add('hidden');
+    hideSearchSkeleton();
+    if (err.message !== 'Unauthorized') {
+      showToast('Search failed: ' + err.message, 'error');
+    }
+  }
+}
+
+function showSearchSkeleton() {
+  const container = document.getElementById('search-skeleton');
+  container.innerHTML = '';
+  for (let i = 0; i < 12; i++) {
+    container.innerHTML += `
+      <div class="bg-slate-900 rounded-xl overflow-hidden border border-slate-800">
+        <div class="skeleton h-48 w-full"></div>
+        <div class="p-3 space-y-2">
+          <div class="skeleton h-4 w-3/4 rounded"></div>
+          <div class="skeleton h-3 w-1/2 rounded"></div>
+          <div class="skeleton h-3 w-1/3 rounded"></div>
+        </div>
+      </div>
+    `;
+  }
+  container.classList.remove('hidden');
+}
+
+function hideSearchSkeleton() {
+  document.getElementById('search-skeleton').classList.add('hidden');
+}
+
+function setSortMode(mode) {
+  state.sortMode = mode;
+  document.querySelectorAll('.sort-btn').forEach(el => {
+    const isActive = el.dataset.sort === mode;
+    el.className = `sort-btn text-xs px-3 py-1 rounded-md transition-colors ${isActive ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'}`;
+  });
+  renderSearchResults();
+}
+
+function sortResults(results) {
+  const sorted = [...results];
+  if (state.sortMode === 'seeders') {
+    sorted.sort((a, b) => (b.seeders || 0) - (a.seeders || 0));
+  } else if (state.sortMode === 'size') {
+    sorted.sort((a, b) => parseSize(b.size || '') - parseSize(a.size || ''));
+  }
+  return sorted;
+}
+
+function parseSize(sizeStr) {
+  if (!sizeStr) return 0;
+  const s = sizeStr.toString().toUpperCase();
+  const match = s.match(/([\d.]+)\s*(GB|MB|KB|B)?/);
+  if (!match) return 0;
+  const num = parseFloat(match[1]);
+  const unit = match[2] || 'B';
+  const multipliers = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824 };
+  return num * (multipliers[unit] || 1);
+}
+
+function renderSearchResults() {
+  const container = document.getElementById('search-results');
+  const sorted = sortResults(state.searchResults);
+  container.innerHTML = sorted.map((r, i) => renderBookCard(r, i)).join('');
+}
+
+function renderBookCard(result, index) {
+  const src = SOURCE_COLORS[result.source] || { bg: '#475569', text: 'white', label: result.source || 'Unknown' };
+  const coverHtml = result.cover_url
+    ? `<img src="${escapeHtml(result.cover_url)}" alt="" class="w-full h-48 object-cover" loading="lazy" onerror="this.outerHTML=makePlaceholder('${escapeHtml(result.title || '')}', ${index})">`
+    : makePlaceholderHtml(result.title || '?', index);
+
+  const seeders = result.seeders ? `<span class="text-emerald-400 text-xs font-medium">${result.seeders} seed${result.seeders !== 1 ? 's' : ''}</span>` : '';
+  const leechers = result.leechers ? `<span class="text-amber-400 text-xs">${result.leechers} leech</span>` : '';
+  const sizeText = (result.size && result.size > 0) ? formatSize(result.size) : (result.size_human || result.sizeHuman || '');
+  const size = sizeText ? `<span class="text-slate-400 text-xs font-medium">${escapeHtml(sizeText)}</span>` : '';
+  const format = result.format ? `<span class="text-slate-500 text-xs uppercase">${escapeHtml(result.format)}</span>` : '';
+  const indexer = result.indexer ? `<span class="text-slate-600 text-xs">${escapeHtml(result.indexer)}</span>` : '';
+
+  return `
+    <div class="book-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-slate-600 flex flex-col">
+      <div class="relative">
+        ${coverHtml}
+        <span class="absolute top-2 left-2 px-2 py-0.5 rounded text-xs font-medium" style="background:${src.bg};color:${src.text}">${escapeHtml(src.label)}</span>
+      </div>
+      <div class="p-3 flex-1 flex flex-col">
+        <h3 class="text-sm font-semibold text-white line-clamp-2 mb-1" title="${escapeHtml(result.title || '')}">${escapeHtml(result.title || 'Unknown')}</h3>
+        <p class="text-xs text-slate-400 mb-2 line-clamp-1">${escapeHtml(result.author || '')}</p>
+        <div class="flex items-center gap-2 flex-wrap mt-auto mb-2">
+          ${seeders}${leechers}${size}${format}${indexer}
+        </div>
+        <button onclick='startDownload(${JSON.stringify(result).replace(/'/g, "&#39;")})' class="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium py-1.5 rounded-lg transition-colors flex items-center justify-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Download
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function makePlaceholderHtml(title, index) {
+  const gradient = COVER_GRADIENTS[index % COVER_GRADIENTS.length];
+  const letter = (title || '?').charAt(0).toUpperCase();
+  return `<div class="w-full h-48 bg-gradient-to-br ${gradient} cover-placeholder">${escapeHtml(letter)}</div>`;
+}
+
+// Global function for img onerror fallback
+window.makePlaceholder = function(title, index) {
+  const gradient = COVER_GRADIENTS[index % COVER_GRADIENTS.length];
+  const letter = (title || '?').charAt(0).toUpperCase();
+  return `<div class="w-full h-48 bg-gradient-to-br ${gradient} cover-placeholder">${escapeHtml(letter)}</div>`;
+};
+
+function formatSize(size) {
+  if (typeof size === 'string') return size;
+  if (typeof size === 'number') {
+    if (size > 1073741824) return (size / 1073741824).toFixed(1) + ' GB';
+    if (size > 1048576) return (size / 1048576).toFixed(1) + ' MB';
+    if (size > 1024) return (size / 1024).toFixed(1) + ' KB';
+    return size + ' B';
+  }
+  return '';
+}
+
+// ============================================================
+// DOWNLOAD
+// ============================================================
+async function startDownload(result) {
+  try {
+    const body = {
+      title: result.title,
+      download_url: result.download_url || result.url || '',
+      source: result.source,
+      md5: result.md5 || '',
+      author: result.author || '',
+      info_hash: result.info_hash || '',
+      magnet: result.magnet || '',
+    };
+
+    const data = await apiJson('/api/download', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+
+    if (data.success || data.job_id) {
+      showToast(`Download started: ${result.title}`, 'success');
+    } else {
+      showToast(`Download failed: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (err) {
+    if (err.message !== 'Unauthorized') {
+      showToast('Download failed: ' + err.message, 'error');
+    }
+  }
+}
+
+async function refreshDownloads() {
+  try {
+    const data = await apiJson('/api/downloads');
+    const jobs = data.jobs || [];
+    const container = document.getElementById('downloads-list');
+    const emptyEl = document.getElementById('downloads-empty');
+
+    // Update badge
+    const activeCount = jobs.filter(j => j.status === 'downloading' || j.status === 'queued' || j.status === 'searching' || j.status === 'organizing' || j.status === 'importing').length;
+    const badge = document.getElementById('dl-badge');
+    if (activeCount > 0) {
+      badge.textContent = activeCount;
+      badge.classList.remove('hidden');
+    } else {
+      badge.classList.add('hidden');
+    }
+
+    if (jobs.length === 0) {
+      container.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+
+    emptyEl.classList.add('hidden');
+    container.innerHTML = jobs.map(renderDownloadJob).join('');
+  } catch (err) {
+    if (err.message !== 'Unauthorized') {
+      showToast('Failed to load downloads', 'error');
+    }
+  }
+}
+
+function renderDownloadJob(job) {
+  const st = STATUS_STYLES[job.status] || STATUS_STYLES.queued;
+  const progress = job.progress || 0;
+  const showProgress = job.status === 'downloading' && progress > 0;
+
+  let actions = '';
+  if (job.status === 'error' || job.status === 'dead_letter') {
+    actions = `<button onclick="retryDownload('${escapeHtml(job.job_id)}')" class="px-2.5 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors">Retry</button>`;
+  }
+
+  return `
+    <div class="bg-slate-900 border ${st.border} rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="px-2 py-0.5 rounded text-xs font-medium ${st.bg} ${st.text}">${st.label}</span>
+          ${job.source ? `<span class="text-xs text-slate-500">${escapeHtml(job.source)}</span>` : ''}
+        </div>
+        <h4 class="text-sm font-medium text-white truncate" title="${escapeHtml(job.title || '')}">${escapeHtml(job.title || 'Unknown')}</h4>
+        ${job.error ? `<p class="text-xs text-red-400 mt-1 truncate">${escapeHtml(job.error)}</p>` : ''}
+        ${showProgress ? `
+          <div class="mt-2 w-full bg-slate-800 rounded-full h-1.5">
+            <div class="progress-bar bg-indigo-500 h-1.5 rounded-full" style="width:${progress}%"></div>
+          </div>
+          <span class="text-xs text-slate-500 mt-1">${progress.toFixed(1)}%</span>
+        ` : ''}
+      </div>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        ${job.size ? `<span class="text-xs text-slate-500">${escapeHtml(formatSize(job.size))}</span>` : ''}
+        ${actions}
+      </div>
+    </div>
+  `;
+}
+
+async function retryDownload(jobId) {
+  try {
+    await apiJson(`/api/downloads/jobs/${jobId}/retry`, { method: 'POST' });
+    showToast('Retrying download', 'info');
+    refreshDownloads();
+  } catch (err) {
+    if (err.message !== 'Unauthorized') showToast('Retry failed', 'error');
+  }
+}
+
+async function clearCompleted() {
+  try {
+    await apiJson('/api/downloads/clear', { method: 'POST' });
+    showToast('Cleared completed downloads', 'success');
+    refreshDownloads();
+  } catch (err) {
+    if (err.message !== 'Unauthorized') showToast('Failed to clear', 'error');
+  }
+}
+
+function startDownloadPolling() {
+  stopDownloadPolling();
+  state.downloadPollTimer = setInterval(refreshDownloads, 5000);
+}
+
+function stopDownloadPolling() {
+  if (state.downloadPollTimer) {
+    clearInterval(state.downloadPollTimer);
+    state.downloadPollTimer = null;
+  }
+}
+
+// ============================================================
+// LIBRARY
+// ============================================================
+let librarySearchTimeout = null;
+
+document.getElementById('library-search').addEventListener('input', (e) => {
+  clearTimeout(librarySearchTimeout);
+  state.libraryPage = 1;
+  librarySearchTimeout = setTimeout(() => loadLibrary(), 400);
+});
+
+async function loadLibrary() {
+  const tab = state.libraryTab;
+  const q = document.getElementById('library-search').value.trim();
+  const page = state.libraryPage;
+
+  const endpoints = {
+    ebooks: `/api/library?page=${page}${q ? '&q=' + encodeURIComponent(q) : ''}`,
+    audiobooks: `/api/library/audiobooks?page=${page}${q ? '&q=' + encodeURIComponent(q) : ''}`,
+    manga: `/api/library/manga?page=${page}${q ? '&q=' + encodeURIComponent(q) : ''}`,
+  };
+
+  const container = document.getElementById('library-results');
+  const emptyEl = document.getElementById('library-empty');
+  const paginationEl = document.getElementById('library-pagination');
+
+  try {
+    const data = await apiJson(endpoints[tab]);
+    const items = data.items || [];
+    state.libraryPages = data.pages || 1;
+
+    if (items.length === 0) {
+      container.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      paginationEl.classList.add('hidden');
+      return;
+    }
+
+    emptyEl.classList.add('hidden');
+
+    // Group items by series and render with section headers
+    const renderFn = tab === 'ebooks' ? renderLibraryEbook : tab === 'audiobooks' ? renderLibraryAudiobook : renderLibraryManga;
+    container.innerHTML = renderGroupedBySeries(items, renderFn);
+
+    // Pagination
+    if (state.libraryPages > 1) {
+      paginationEl.classList.remove('hidden');
+      renderPagination(paginationEl, page, state.libraryPages);
+    } else {
+      paginationEl.classList.add('hidden');
+    }
+  } catch (err) {
+    if (err.message !== 'Unauthorized') {
+      container.innerHTML = `<div class="col-span-full text-center py-10 text-slate-500">Failed to load library</div>`;
+    }
+  }
+}
+
+function seriesBaseName(series) {
+  // Strip "#N", "Book N", "(N)", "Vol N", "Volume N" suffixes to get the base series name
+  if (!series) return '';
+  return series
+    .replace(/\s*#\s*[\d.]+.*$/, '')
+    .replace(/\s*Book\s+[\d.]+.*$/i, '')
+    .replace(/\s*Vol(ume)?\s*\.?\s*[\d.]+.*$/i, '')
+    .replace(/\s*\([\d.]+\).*$/, '')
+    .replace(/\s*,\s*$/, '')
+    .trim();
+}
+
+function renderGroupedBySeries(items, renderFn) {
+  const groups = new Map(); // base series name → items
+  const standalone = [];
+  let idx = 0;
+
+  for (const item of items) {
+    const raw = item.series || '';
+    const base = seriesBaseName(raw);
+    if (base) {
+      if (!groups.has(base)) groups.set(base, []);
+      groups.get(base).push(item);
+    } else {
+      standalone.push(item);
+    }
+  }
+
+  let html = '';
+  for (const [series, groupItems] of groups) {
+    if (groupItems.length > 1) {
+      // Series header
+      html += `<div class="col-span-full mt-4 mb-2 first:mt-0">
+        <div class="flex items-center gap-3">
+          <h3 class="text-sm font-semibold text-indigo-400">${escapeHtml(series)}</h3>
+          <span class="text-xs text-slate-600">${groupItems.length} items</span>
+          <div class="flex-1 border-t border-slate-800"></div>
+        </div>
+      </div>`;
+    }
+    for (const item of groupItems) {
+      html += renderFn(item, idx++);
+    }
+    if (groupItems.length > 1) {
+      // Spacer after series group
+      html += `<div class="col-span-full h-2"></div>`;
+    }
+  }
+
+  // Standalone items (no series)
+  if (standalone.length > 0 && groups.size > 0) {
+    html += `<div class="col-span-full mt-4 mb-2">
+      <div class="flex items-center gap-3">
+        <h3 class="text-sm font-semibold text-slate-500">Other</h3>
+        <div class="flex-1 border-t border-slate-800"></div>
+      </div>
+    </div>`;
+  }
+  for (const item of standalone) {
+    html += renderFn(item, idx++);
+  }
+
+  return html;
+}
+
+function renderLibraryEbook(item, index) {
+  const coverHtml = item.cover_url
+    ? `<img src="${escapeHtml(item.cover_url)}" alt="" class="w-full h-48 object-cover" loading="lazy" onerror="this.outerHTML=makePlaceholder('${escapeJs(item.title || '')}', ${index})">`
+    : makePlaceholderHtml(item.title || '?', index);
+
+  const format = item.format || (item.file_path || '').split('.').pop() || '';
+
+  const seriesBadge = item.series ? `<p class="text-xs text-indigo-400 line-clamp-1 mb-1">${escapeHtml(item.series)}</p>` : '';
+
+  return `
+    <div class="book-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-slate-600">
+      ${coverHtml}
+      <div class="p-3">
+        <h3 class="text-sm font-semibold text-white line-clamp-2 mb-1">${escapeHtml(item.title || 'Unknown')}</h3>
+        <p class="text-xs text-slate-400 line-clamp-1 mb-1">${escapeHtml(item.author || '')}</p>
+        ${seriesBadge}
+        <div class="flex items-center gap-2 text-xs text-slate-500">
+          ${format ? `<span class="uppercase">${escapeHtml(format)}</span>` : ''}
+          ${item.size ? `<span>${escapeHtml(formatSize(item.size))}</span>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderLibraryAudiobook(item, index) {
+  const coverHtml = item.cover_url
+    ? `<img src="${escapeHtml(item.cover_url)}" alt="" class="w-full h-48 object-cover" loading="lazy" onerror="this.outerHTML=makePlaceholder('${escapeJs(item.title || '')}', ${index})">`
+    : makePlaceholderHtml(item.title || '?', index);
+
+  const duration = item.duration_hours ? `${item.duration_hours.toFixed(1)}h` : '';
+
+  return `
+    <div class="book-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-slate-600">
+      ${coverHtml}
+      <div class="p-3">
+        <h3 class="text-sm font-semibold text-white line-clamp-2 mb-1">${escapeHtml(item.title || 'Unknown')}</h3>
+        <p class="text-xs text-slate-400 line-clamp-1 mb-1">${escapeHtml(item.author || '')}</p>
+        ${item.series ? `<p class="text-xs text-indigo-400 line-clamp-1 mb-1">${escapeHtml(item.series)}</p>` : ''}
+        <div class="flex items-center gap-2 text-xs text-slate-500 mb-2">
+          ${duration ? `<span>${duration}</span>` : ''}
+          ${item.num_files ? `<span>${item.num_files} files</span>` : ''}
+        </div>
+        ${item.abs_url ? `<a href="${escapeHtml(item.abs_url)}" target="_blank" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">Open in Audiobookshelf</a>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderLibraryManga(item, index) {
+  const coverHtml = item.cover_url
+    ? `<img src="${escapeHtml(item.cover_url)}" alt="" class="w-full h-48 object-cover" loading="lazy" onerror="this.outerHTML=makePlaceholder('${escapeJs(item.name || '')}', ${index})">`
+    : makePlaceholderHtml(item.name || '?', index);
+
+  return `
+    <div class="book-card bg-slate-900 rounded-xl overflow-hidden border border-slate-800 hover:border-slate-600">
+      ${coverHtml}
+      <div class="p-3">
+        <h3 class="text-sm font-semibold text-white line-clamp-2 mb-1">${escapeHtml(item.name || 'Unknown')}</h3>
+        <div class="flex items-center gap-2 text-xs text-slate-500 mb-2">
+          ${item.pages ? `<span>${item.pages} pages</span>` : ''}
+          ${item.library ? `<span>${escapeHtml(item.library)}</span>` : ''}
+        </div>
+        ${item.kavita_url ? `<a href="${escapeHtml(item.kavita_url)}" target="_blank" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">Open in Kavita</a>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderPagination(container, currentPage, totalPages) {
+  let html = '';
+
+  // Previous
+  html += `<button onclick="goLibraryPage(${currentPage - 1})" class="px-3 py-1.5 text-sm rounded-lg ${currentPage <= 1 ? 'bg-slate-800 text-slate-600 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}" ${currentPage <= 1 ? 'disabled' : ''}>Prev</button>`;
+
+  // Page numbers
+  const maxVisible = 7;
+  let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+  let end = Math.min(totalPages, start + maxVisible - 1);
+  if (end - start < maxVisible - 1) start = Math.max(1, end - maxVisible + 1);
+
+  if (start > 1) {
+    html += `<button onclick="goLibraryPage(1)" class="px-3 py-1.5 text-sm rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">1</button>`;
+    if (start > 2) html += `<span class="text-slate-600 px-1">...</span>`;
+  }
+
+  for (let i = start; i <= end; i++) {
+    html += `<button onclick="goLibraryPage(${i})" class="px-3 py-1.5 text-sm rounded-lg ${i === currentPage ? 'bg-indigo-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}">${i}</button>`;
+  }
+
+  if (end < totalPages) {
+    if (end < totalPages - 1) html += `<span class="text-slate-600 px-1">...</span>`;
+    html += `<button onclick="goLibraryPage(${totalPages})" class="px-3 py-1.5 text-sm rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">${totalPages}</button>`;
+  }
+
+  // Next
+  html += `<button onclick="goLibraryPage(${currentPage + 1})" class="px-3 py-1.5 text-sm rounded-lg ${currentPage >= totalPages ? 'bg-slate-800 text-slate-600 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>`;
+
+  container.innerHTML = html;
+}
+
+function goLibraryPage(page) {
+  if (page < 1 || page > state.libraryPages) return;
+  state.libraryPage = page;
+  loadLibrary();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ============================================================
+// WISHLIST
+// ============================================================
+async function loadWishlist() {
+  try {
+    const data = await apiJson('/api/wishlist');
+    const items = data.items || [];
+    const container = document.getElementById('wishlist-list');
+    const emptyEl = document.getElementById('wishlist-empty');
+
+    if (items.length === 0) {
+      container.innerHTML = '';
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+
+    emptyEl.classList.add('hidden');
+    container.innerHTML = items.map(renderWishlistItem).join('');
+  } catch (err) {
+    if (err.message !== 'Unauthorized') {
+      showToast('Failed to load wishlist', 'error');
+    }
+  }
+}
+
+function renderWishlistItem(item) {
+  const typeColors = { ebook: 'bg-indigo-500/20 text-indigo-400', audiobook: 'bg-purple-500/20 text-purple-400', manga: 'bg-pink-500/20 text-pink-400' };
+  const tc = typeColors[item.media_type] || typeColors.ebook;
+  const date = item.created_at ? new Date(item.created_at).toLocaleDateString() : '';
+
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 flex items-center gap-4">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-0.5">
+          <span class="px-2 py-0.5 rounded text-xs font-medium ${tc}">${escapeHtml(item.media_type || 'ebook')}</span>
+          ${date ? `<span class="text-xs text-slate-600">${date}</span>` : ''}
+        </div>
+        <h4 class="text-sm font-medium text-white truncate">${escapeHtml(item.title || '')}</h4>
+        ${item.author ? `<p class="text-xs text-slate-400">${escapeHtml(item.author)}</p>` : ''}
+      </div>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        <button onclick="searchWishlistItem('${escapeJs(item.title)}', '${escapeJs(item.media_type || 'ebook')}')" class="px-2.5 py-1 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded transition-colors" title="Search for this item">Search</button>
+        <button onclick="deleteWishlistItem(${item.id})" class="px-2.5 py-1 text-xs bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white rounded transition-colors" title="Remove">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function showWishlistForm() {
+  document.getElementById('wishlist-form').classList.remove('hidden');
+  document.getElementById('wl-title').focus();
+}
+
+function hideWishlistForm() {
+  document.getElementById('wishlist-form').classList.add('hidden');
+  document.getElementById('wl-title').value = '';
+  document.getElementById('wl-author').value = '';
+}
+
+async function addWishlistItem() {
+  const title = document.getElementById('wl-title').value.trim();
+  const author = document.getElementById('wl-author').value.trim();
+  const mediaType = document.getElementById('wl-type').value;
+
+  if (!title) {
+    showToast('Title is required', 'warning');
+    return;
+  }
+
+  try {
+    await apiJson('/api/wishlist', {
+      method: 'POST',
+      body: JSON.stringify({ title, author, media_type: mediaType }),
+    });
+    showToast('Added to wishlist', 'success');
+    hideWishlistForm();
+    loadWishlist();
+  } catch (err) {
+    if (err.message !== 'Unauthorized') showToast('Failed to add to wishlist', 'error');
+  }
+}
+
+async function deleteWishlistItem(id) {
+  try {
+    await api(`/api/wishlist/${id}`, { method: 'DELETE' });
+    showToast('Removed from wishlist', 'success');
+    loadWishlist();
+  } catch (err) {
+    if (err.message !== 'Unauthorized') showToast('Failed to delete', 'error');
+  }
+}
+
+function searchWishlistItem(title, mediaType) {
+  const tabMap = { ebook: 'ebooks', audiobook: 'audiobooks', manga: 'manga' };
+  switchTab('search');
+  switchSearchTab(tabMap[mediaType] || 'ebooks');
+  document.getElementById('search-input').value = title;
+  doSearch(title);
+}
+
+// ============================================================
+// SETTINGS
+// ============================================================
+async function loadSettings() {
+  loadConfig();
+  loadSources();
+}
+
+async function loadConfig() {
+  try {
+    const data = await apiJson('/api/config');
+    state.config = data;
+
+    const configEl = document.getElementById('config-info');
+    const items = [];
+
+    if (data.prowlarr) items.push(configItem('Prowlarr', data.prowlarr.url || 'Not configured'));
+    if (data.qbittorrent) items.push(configItem('qBittorrent', data.qbittorrent.url || 'Not configured'));
+    if (data.sabnzbd) items.push(configItem('SABnzbd', data.sabnzbd.url || 'Not configured'));
+    if (data.kavita_url) items.push(configItem('Kavita', data.kavita_url));
+    if (data.audiobookshelf_url) items.push(configItem('Audiobookshelf', data.audiobookshelf_url));
+
+    configEl.innerHTML = items.length > 0 ? items.join('') : '<p class="text-slate-500">No configuration data available</p>';
+  } catch (err) {
+    if (err.message !== 'Unauthorized') {
+      document.getElementById('config-info').innerHTML = '<p class="text-red-400">Failed to load configuration</p>';
+    }
+  }
+}
+
+function configItem(label, value) {
+  return `
+    <div class="flex items-center justify-between py-2 border-b border-slate-800 last:border-0">
+      <span class="text-slate-300">${escapeHtml(label)}</span>
+      <span class="text-slate-500 text-xs truncate max-w-[60%] text-right">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
+async function loadSources() {
+  const container = document.getElementById('sources-list');
+  const loadingEl = document.getElementById('sources-loading');
+
+  try {
+    const data = await apiJson('/api/sources');
+    const sources = Array.isArray(data) ? data : (data.sources || []);
+    loadingEl.classList.add('hidden');
+
+    if (sources.length === 0) {
+      container.innerHTML = '<p class="text-slate-500 text-sm">No sources configured</p>';
+      return;
+    }
+
+    container.innerHTML = sources.map(s => {
+      const enabled = s.enabled !== false;
+      const tabLabel = s.search_tab || s.download_type || '';
+      return `
+        <div class="flex items-center justify-between bg-slate-800/50 rounded-lg px-4 py-2.5">
+          <div class="flex items-center gap-3">
+            <div class="w-2 h-2 rounded-full ${enabled ? 'bg-emerald-400' : 'bg-slate-600'}"></div>
+            <span class="text-sm text-slate-300">${escapeHtml(s.label || s.name || 'Unknown')}</span>
+            ${tabLabel ? `<span class="text-xs text-slate-600">${escapeHtml(tabLabel)}</span>` : ''}
+          </div>
+          <span class="text-xs ${enabled ? 'text-emerald-400' : 'text-slate-500'}">${enabled ? 'Enabled' : 'Disabled'}</span>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    loadingEl.classList.add('hidden');
+    if (err.message !== 'Unauthorized') {
+      container.innerHTML = '<p class="text-red-400 text-sm">Failed to load sources</p>';
+    }
+  }
+}
+
+async function testConnection(service) {
+  const statusEl = document.getElementById(`test-${service}-status`);
+  statusEl.textContent = 'Testing...';
+  statusEl.className = 'text-xs text-yellow-400';
+
+  try {
+    const data = await apiJson(`/api/test/${service}`, { method: 'POST' });
+    if (data.success) {
+      statusEl.textContent = 'Connected';
+      statusEl.className = 'text-xs text-emerald-400';
+    } else {
+      statusEl.textContent = data.error || 'Failed';
+      statusEl.className = 'text-xs text-red-400';
+    }
+  } catch (err) {
+    statusEl.textContent = 'Error';
+    statusEl.className = 'text-xs text-red-400';
+  }
+}
+
+// ============================================================
+// STATS
+// ============================================================
+async function loadStats() {
+  try {
+    const data = await apiJson('/api/stats');
+    const statsEl = document.getElementById('header-stats');
+    if (data.total_items !== undefined) {
+      statsEl.textContent = `${data.total_items} items in library`;
+      statsEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    // Silently ignore
+  }
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function escapeJs(str) {
+  if (!str) return '';
+  return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
+}
+
+// ============================================================
+// KEYBOARD SHORTCUTS
+// ============================================================
+document.addEventListener('keydown', (e) => {
+  // Ctrl/Cmd + K → focus search
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    switchTab('search');
+    document.getElementById('search-input').focus();
+  }
+
+  // Escape → close modals, clear search
+  if (e.key === 'Escape') {
+    hideWishlistForm();
+  }
+});
+
+// ============================================================
+// INIT
+// ============================================================
+async function init() {
+  try {
+    // Test auth by hitting config
+    await apiJson('/api/config');
+    // Auth OK
+    loadStats();
+    // Show default tab
+    document.getElementById('search-empty').classList.remove('hidden');
+  } catch (err) {
+    if (err.message === 'Unauthorized') {
+      // Login modal already shown by api()
+    }
+  }
+}
+
+// Start
+init();
+</script>
+</body>
+</html>
