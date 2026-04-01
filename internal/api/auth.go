@@ -340,6 +340,8 @@ func handleLogin(cfg *config.Config, database *db.DB, sessions *SessionStore) ht
 				SameSite: http.SameSiteLaxMode,
 			})
 
+			database.LogActivity(user.Username, "login", user.Username, "User logged in")
+
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"success":  true,
 				"token":    token,
@@ -375,6 +377,8 @@ func handleLogin(cfg *config.Config, database *db.DB, sessions *SessionStore) ht
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
 		})
+
+		database.LogActivity(cfg.AuthUsername, "login", cfg.AuthUsername, "User logged in (legacy)")
 
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"success":  true,
@@ -745,12 +749,14 @@ func handleDeleteUser(database *db.DB) http.HandlerFunc {
 }
 
 // handleLogout handles POST /api/logout.
-func handleLogout(sessions *SessionStore) http.HandlerFunc {
+func handleLogout(sessions *SessionStore, database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		username, _ := r.Context().Value(ctxUsername).(string)
 		cookie, err := r.Cookie("librarr_session")
 		if err == nil {
 			sessions.Delete(cookie.Value)
 		}
+		database.LogActivity(username, "logout", username, "User logged out")
 		http.SetCookie(w, &http.Cookie{
 			Name:     "librarr_session",
 			Value:    "",

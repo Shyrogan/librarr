@@ -414,6 +414,9 @@ func (s *Server) handleDeleteBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	username, _ := r.Context().Value(ctxUsername).(string)
+	s.db.LogActivity(username, "library_remove", idStr, fmt.Sprintf("Removed library item %s", idStr))
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 }
 

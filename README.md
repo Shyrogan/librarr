@@ -4,6 +4,7 @@ Self-hosted book, audiobook, and manga search and download manager.
 
 Librarr aggregates 13 search sources into a single interface, handles downloads via qBittorrent or SABnzbd, and automatically organizes files into your Calibre, Audiobookshelf, Kavita, or Komga libraries. It exposes a Torznab/Newznab API so it can act as an indexer in Prowlarr or Readarr, and an OPDS 1.2 feed for e-readers.
 
+
 ## Features
 
 - **13 search sources** in one UI (see table below)

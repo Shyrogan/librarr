@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,9 +123,65 @@ func (d *DB) migrate() error {
 		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 	)`)
 
+	// Requests table for book request workflow.
+	migrations = append(migrations, `CREATE TABLE IF NOT EXISTS requests (
+		id TEXT PRIMARY KEY,
+		user_id INTEGER NOT NULL,
+		username TEXT NOT NULL,
+		title TEXT NOT NULL,
+		author TEXT,
+		book_type TEXT NOT NULL DEFAULT 'ebook',
+		status TEXT NOT NULL DEFAULT 'pending',
+		cover_url TEXT,
+		description TEXT,
+		year TEXT,
+		series_name TEXT,
+		series_position TEXT,
+		search_query TEXT,
+		selected_result_id TEXT,
+		download_id TEXT,
+		attention_note TEXT,
+		auto_approved INTEGER DEFAULT 0,
+		retry_count INTEGER DEFAULT 0,
+		created_at REAL NOT NULL,
+		updated_at REAL NOT NULL
+	)`)
+	migrations = append(migrations, `CREATE INDEX IF NOT EXISTS idx_requests_user_id ON requests(user_id)`)
+	migrations = append(migrations, `CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)`)
+
+	// Notifications table for in-app notifications.
+	migrations = append(migrations, `CREATE TABLE IF NOT EXISTS notifications (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		type TEXT NOT NULL,
+		title TEXT NOT NULL,
+		message TEXT,
+		request_id TEXT,
+		read INTEGER DEFAULT 0,
+		created_at REAL NOT NULL
+	)`)
+	migrations = append(migrations, `CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id)`)
+	migrations = append(migrations, `CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(user_id, read)`)
+
+	// Uploads table.
+	migrations = append(migrations, `CREATE TABLE IF NOT EXISTS uploads (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user TEXT NOT NULL DEFAULT '',
+		filename TEXT NOT NULL DEFAULT '',
+		original_name TEXT NOT NULL DEFAULT '',
+		file_type TEXT NOT NULL DEFAULT '',
+		file_size INTEGER NOT NULL DEFAULT 0,
+		organized_to TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'pending',
+		error TEXT NOT NULL DEFAULT '',
+		created_at REAL NOT NULL DEFAULT (strftime('%s','now'))
+	)`)
+	migrations = append(migrations, `CREATE INDEX IF NOT EXISTS idx_uploads_created ON uploads(created_at)`)
+
 	// Additive migrations — add columns that may not exist yet.
 	addColumns := []string{
 		`ALTER TABLE download_jobs ADD COLUMN status_history TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE activity_log ADD COLUMN user TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, stmt := range addColumns {
 		// Ignore "duplicate column" errors.
@@ -470,6 +527,131 @@ func (d *DB) CountActivity() (int, error) {
 	return count, err
 }
 
+// LogActivity appends a user-attributed event to the activity log.
+func (d *DB) LogActivity(user, action, target, detail string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.db.Exec(
+		`INSERT INTO activity_log (event_type, title, detail, user, job_id) VALUES (?, ?, ?, ?, '')`,
+		action, target, detail, user,
+	)
+	if err != nil {
+		slog.Warn("LogActivity failed", "error", err)
+	}
+}
+
+// GetActivityLog returns paginated activity entries with optional filters.
+func (d *DB) GetActivityLog(user, action string, limit, offset int) ([]models.ActivityEntry, error) {
+	query := "SELECT id, event_type, title, detail, user, timestamp FROM activity_log"
+	var args []interface{}
+	var conditions []string
+
+	if user != "" {
+		conditions = append(conditions, "user = ?")
+		args = append(args, user)
+	}
+	if action != "" {
+		conditions = append(conditions, "event_type = ?")
+		args = append(args, action)
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []models.ActivityEntry
+	for rows.Next() {
+		var e models.ActivityEntry
+		var ts float64
+		var userStr sql.NullString
+		if err := rows.Scan(&e.ID, &e.Action, &e.Target, &e.Detail, &userStr, &ts); err != nil {
+			continue
+		}
+		if userStr.Valid {
+			e.User = userStr.String
+		}
+		e.CreatedAt = time.Unix(int64(ts), 0)
+		entries = append(entries, e)
+	}
+	return entries, nil
+}
+
+// GetActivityLogCount returns the total number of activity entries matching filters.
+func (d *DB) GetActivityLogCount(user, action string) (int, error) {
+	query := "SELECT COUNT(*) FROM activity_log"
+	var args []interface{}
+	var conditions []string
+
+	if user != "" {
+		conditions = append(conditions, "user = ?")
+		args = append(args, user)
+	}
+	if action != "" {
+		conditions = append(conditions, "event_type = ?")
+		args = append(args, action)
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	var count int
+	err := d.db.QueryRow(query, args...).Scan(&count)
+	return count, err
+}
+
+// --- Uploads ---
+
+// SaveUpload records a file upload.
+func (d *DB) SaveUpload(user, filename, originalName, fileType string, fileSize int64, organizedTo, status, errMsg string) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(
+		`INSERT INTO uploads (user, filename, original_name, file_type, file_size, organized_to, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		user, filename, originalName, fileType, fileSize, organizedTo, status, errMsg,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// GetUploads returns recent uploads.
+func (d *DB) GetUploads(limit, offset int) ([]models.UploadRecord, error) {
+	rows, err := d.db.Query(
+		`SELECT id, user, filename, original_name, file_type, file_size, organized_to, status, error, created_at
+		 FROM uploads ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var uploads []models.UploadRecord
+	for rows.Next() {
+		var u models.UploadRecord
+		var ts float64
+		if err := rows.Scan(&u.ID, &u.User, &u.Filename, &u.OriginalName, &u.FileType, &u.FileSize, &u.OrganizedTo, &u.Status, &u.Error, &ts); err != nil {
+			continue
+		}
+		u.CreatedAt = time.Unix(int64(ts), 0)
+		uploads = append(uploads, u)
+	}
+	return uploads, nil
+}
+
 // --- Download Jobs ---
 
 // SaveJob persists a download job.
@@ -700,6 +882,338 @@ func scanJobFromRows(rows *sql.Rows) (*models.DownloadJob, error) {
 		_ = json.Unmarshal([]byte(historyJSON), &j.StatusHistory)
 	}
 	return &j, nil
+}
+
+// --- Requests ---
+
+// CreateRequest inserts a new book request.
+func (d *DB) CreateRequest(req *models.Request) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.db.Exec(
+		`INSERT INTO requests (id, user_id, username, title, author, book_type, status, cover_url, description, year, series_name, series_position, search_query, selected_result_id, download_id, attention_note, auto_approved, retry_count, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.ID, req.UserID, req.Username, req.Title, req.Author, req.BookType,
+		req.Status, req.CoverURL, req.Description, req.Year,
+		req.SeriesName, req.SeriesPosition, req.SearchQuery,
+		req.SelectedResultID, req.DownloadID, req.AttentionNote,
+		boolToInt(req.AutoApproved), req.RetryCount,
+		float64(req.CreatedAt.Unix()), float64(req.UpdatedAt.Unix()),
+	)
+	return err
+}
+
+// GetRequest retrieves a request by ID.
+func (d *DB) GetRequest(id string) (*models.Request, error) {
+	row := d.db.QueryRow(
+		`SELECT id, user_id, username, title, author, book_type, status, cover_url, description, year, series_name, series_position, search_query, selected_result_id, download_id, attention_note, auto_approved, retry_count, created_at, updated_at
+		 FROM requests WHERE id = ?`, id,
+	)
+	return scanRequest(row)
+}
+
+// ListRequests returns requests filtered by optional user ID and status.
+// If userID is 0, all requests are returned (admin view).
+func (d *DB) ListRequests(userID int64, status string, limit, offset int) ([]models.Request, error) {
+	query := "SELECT id, user_id, username, title, author, book_type, status, cover_url, description, year, series_name, series_position, search_query, selected_result_id, download_id, attention_note, auto_approved, retry_count, created_at, updated_at FROM requests"
+	var args []interface{}
+	var conditions []string
+
+	if userID > 0 {
+		conditions = append(conditions, "user_id = ?")
+		args = append(args, userID)
+	}
+	if status != "" {
+		conditions = append(conditions, "status = ?")
+		args = append(args, status)
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var requests []models.Request
+	for rows.Next() {
+		req, err := scanRequestFromRows(rows)
+		if err != nil {
+			continue
+		}
+		requests = append(requests, *req)
+	}
+	return requests, nil
+}
+
+// CountRequests returns the number of requests matching the filters.
+func (d *DB) CountRequests(userID int64, status string) (int, error) {
+	query := "SELECT COUNT(*) FROM requests"
+	var args []interface{}
+	var conditions []string
+
+	if userID > 0 {
+		conditions = append(conditions, "user_id = ?")
+		args = append(args, userID)
+	}
+	if status != "" {
+		conditions = append(conditions, "status = ?")
+		args = append(args, status)
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	var count int
+	err := d.db.QueryRow(query, args...).Scan(&count)
+	return count, err
+}
+
+// UpdateRequestStatus updates the status and optional fields of a request.
+func (d *DB) UpdateRequestStatus(id, status string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.db.Exec(
+		`UPDATE requests SET status = ?, updated_at = ? WHERE id = ?`,
+		status, float64(time.Now().Unix()), id,
+	)
+	return err
+}
+
+// UpdateRequest updates mutable fields on a request.
+func (d *DB) UpdateRequest(req *models.Request) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.db.Exec(
+		`UPDATE requests SET status = ?, search_query = ?, selected_result_id = ?, download_id = ?, attention_note = ?, retry_count = ?, updated_at = ?
+		 WHERE id = ?`,
+		req.Status, req.SearchQuery, req.SelectedResultID, req.DownloadID,
+		req.AttentionNote, req.RetryCount, float64(time.Now().Unix()), req.ID,
+	)
+	return err
+}
+
+// DeleteRequest removes a request by ID.
+func (d *DB) DeleteRequest(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec("DELETE FROM requests WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("request not found")
+	}
+	return nil
+}
+
+func scanRequest(row *sql.Row) (*models.Request, error) {
+	var req models.Request
+	var createdAt, updatedAt float64
+	var author, coverURL, description, year, seriesName, seriesPosition sql.NullString
+	var searchQuery, selectedResultID, downloadID, attentionNote sql.NullString
+	var autoApproved int
+
+	err := row.Scan(
+		&req.ID, &req.UserID, &req.Username, &req.Title, &author,
+		&req.BookType, &req.Status, &coverURL, &description, &year,
+		&seriesName, &seriesPosition, &searchQuery, &selectedResultID,
+		&downloadID, &attentionNote, &autoApproved, &req.RetryCount,
+		&createdAt, &updatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Author = nullStr(author)
+	req.CoverURL = nullStr(coverURL)
+	req.Description = nullStr(description)
+	req.Year = nullStr(year)
+	req.SeriesName = nullStr(seriesName)
+	req.SeriesPosition = nullStr(seriesPosition)
+	req.SearchQuery = nullStr(searchQuery)
+	req.SelectedResultID = nullStr(selectedResultID)
+	req.DownloadID = nullStr(downloadID)
+	req.AttentionNote = nullStr(attentionNote)
+	req.AutoApproved = autoApproved == 1
+	req.CreatedAt = time.Unix(int64(createdAt), 0)
+	req.UpdatedAt = time.Unix(int64(updatedAt), 0)
+	return &req, nil
+}
+
+func scanRequestFromRows(rows *sql.Rows) (*models.Request, error) {
+	var req models.Request
+	var createdAt, updatedAt float64
+	var author, coverURL, description, year, seriesName, seriesPosition sql.NullString
+	var searchQuery, selectedResultID, downloadID, attentionNote sql.NullString
+	var autoApproved int
+
+	err := rows.Scan(
+		&req.ID, &req.UserID, &req.Username, &req.Title, &author,
+		&req.BookType, &req.Status, &coverURL, &description, &year,
+		&seriesName, &seriesPosition, &searchQuery, &selectedResultID,
+		&downloadID, &attentionNote, &autoApproved, &req.RetryCount,
+		&createdAt, &updatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Author = nullStr(author)
+	req.CoverURL = nullStr(coverURL)
+	req.Description = nullStr(description)
+	req.Year = nullStr(year)
+	req.SeriesName = nullStr(seriesName)
+	req.SeriesPosition = nullStr(seriesPosition)
+	req.SearchQuery = nullStr(searchQuery)
+	req.SelectedResultID = nullStr(selectedResultID)
+	req.DownloadID = nullStr(downloadID)
+	req.AttentionNote = nullStr(attentionNote)
+	req.AutoApproved = autoApproved == 1
+	req.CreatedAt = time.Unix(int64(createdAt), 0)
+	req.UpdatedAt = time.Unix(int64(updatedAt), 0)
+	return &req, nil
+}
+
+func nullStr(ns sql.NullString) string {
+	if ns.Valid {
+		return ns.String
+	}
+	return ""
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// --- Notifications ---
+
+// CreateNotification inserts a new notification.
+func (d *DB) CreateNotification(n *models.Notification) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(
+		`INSERT INTO notifications (user_id, type, title, message, request_id, read, created_at)
+		 VALUES (?, ?, ?, ?, ?, 0, ?)`,
+		n.UserID, n.Type, n.Title, n.Message, n.RequestID,
+		float64(n.CreatedAt.Unix()),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+// GetNotifications returns notifications for a user, newest first.
+func (d *DB) GetNotifications(userID int64, limit, offset int) ([]models.Notification, error) {
+	rows, err := d.db.Query(
+		`SELECT id, user_id, type, title, message, request_id, read, created_at
+		 FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notifications []models.Notification
+	for rows.Next() {
+		n, err := scanNotificationFromRows(rows)
+		if err != nil {
+			continue
+		}
+		notifications = append(notifications, *n)
+	}
+	return notifications, nil
+}
+
+// CountUnreadNotifications returns the number of unread notifications for a user.
+func (d *DB) CountUnreadNotifications(userID int64) (int, error) {
+	var count int
+	err := d.db.QueryRow(
+		`SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read = 0`, userID,
+	).Scan(&count)
+	return count, err
+}
+
+// MarkNotificationRead marks a single notification as read.
+func (d *DB) MarkNotificationRead(id int64, userID int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(
+		`UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?`, id, userID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("notification not found")
+	}
+	return nil
+}
+
+// MarkAllNotificationsRead marks all notifications as read for a user.
+func (d *DB) MarkAllNotificationsRead(userID int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.db.Exec(
+		`UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0`, userID,
+	)
+	return err
+}
+
+// DeleteNotification removes a notification by ID (must belong to user).
+func (d *DB) DeleteNotification(id int64, userID int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	result, err := d.db.Exec(
+		`DELETE FROM notifications WHERE id = ? AND user_id = ?`, id, userID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("notification not found")
+	}
+	return nil
+}
+
+func scanNotificationFromRows(rows *sql.Rows) (*models.Notification, error) {
+	var n models.Notification
+	var createdAt float64
+	var readInt int
+	var message, requestID sql.NullString
+
+	err := rows.Scan(&n.ID, &n.UserID, &n.Type, &n.Title, &message, &requestID, &readInt, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	n.Message = nullStr(message)
+	n.RequestID = nullStr(requestID)
+	n.Read = readInt == 1
+	n.CreatedAt = time.Unix(int64(createdAt), 0)
+	return &n, nil
 }
 
 // ItemToJSON converts a LibraryItem to a JSON-friendly map.

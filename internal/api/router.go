@@ -8,6 +8,8 @@ import (
 	"github.com/JeremiahM37/librarr/internal/config"
 	"github.com/JeremiahM37/librarr/internal/db"
 	"github.com/JeremiahM37/librarr/internal/download"
+	"github.com/JeremiahM37/librarr/internal/metadata"
+	"github.com/JeremiahM37/librarr/internal/organize"
 	"github.com/JeremiahM37/librarr/internal/search"
 	"github.com/JeremiahM37/librarr/internal/torznab"
 	"github.com/JeremiahM37/librarr/web"
@@ -18,33 +20,39 @@ var indexHTML = web.IndexHTML
 
 // Server holds the API dependencies.
 type Server struct {
-	cfg         *config.Config
-	db          *db.DB
-	searchMgr   *search.Manager
-	downloadMgr *download.Manager
-	qb          *download.QBittorrentClient
-	sab         *download.SABnzbdClient
-	mux         *http.ServeMux
-	sessions    *SessionStore
-	metrics     *MetricsCollector
-	rateLimiter *RateLimiter
-	oidc        *OIDCHandler
+	cfg            *config.Config
+	db             *db.DB
+	searchMgr      *search.Manager
+	downloadMgr    *download.Manager
+	qb             *download.QBittorrentClient
+	sab            *download.SABnzbdClient
+	mux            *http.ServeMux
+	sessions       *SessionStore
+	metrics        *MetricsCollector
+	rateLimiter    *RateLimiter
+	oidc           *OIDCHandler
+	metadataClient *metadata.Client
+	organizer      *organize.Organizer
+	targets        *organize.LibraryTargets
 }
 
 // NewServer creates the HTTP API server.
-func NewServer(cfg *config.Config, database *db.DB, searchMgr *search.Manager, downloadMgr *download.Manager, qb *download.QBittorrentClient, sab *download.SABnzbdClient) *Server {
+func NewServer(cfg *config.Config, database *db.DB, searchMgr *search.Manager, downloadMgr *download.Manager, qb *download.QBittorrentClient, sab *download.SABnzbdClient, organizer *organize.Organizer, targets *organize.LibraryTargets) *Server {
 	sessions := NewSessionStore()
 
 	s := &Server{
-		cfg:         cfg,
-		db:          database,
-		searchMgr:   searchMgr,
-		downloadMgr: downloadMgr,
-		qb:          qb,
-		sab:         sab,
-		mux:         http.NewServeMux(),
-		sessions:    sessions,
-		metrics:     NewMetricsCollector(),
+		cfg:            cfg,
+		db:             database,
+		searchMgr:      searchMgr,
+		downloadMgr:    downloadMgr,
+		qb:             qb,
+		sab:            sab,
+		mux:            http.NewServeMux(),
+		sessions:       sessions,
+		metrics:        NewMetricsCollector(),
+		metadataClient: metadata.NewClient(&http.Client{Timeout: 15 * time.Second}),
+		organizer:      organizer,
+		targets:        targets,
 	}
 
 	// Initialize OIDC handler if configured.
@@ -87,7 +95,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/login", handleLogin(s.cfg, s.db, s.sessions))
 	s.mux.HandleFunc("POST /api/login/totp", handleLoginTOTP(s.db, s.sessions))
 	s.mux.HandleFunc("POST /api/register", handleRegister(s.db, s.sessions))
-	s.mux.HandleFunc("POST /api/logout", handleLogout(s.sessions))
+	s.mux.HandleFunc("POST /api/logout", handleLogout(s.sessions, s.db))
 	s.mux.HandleFunc("GET /api/auth/status", handleAuthStatus(s.db, s.sessions))
 
 	// User management (admin only).
@@ -139,6 +147,23 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/wishlist", s.handleAddWishlist)
 	s.mux.HandleFunc("DELETE /api/wishlist/{id}", s.handleDeleteWishlist)
 
+	// Requests (book request workflow).
+	s.mux.HandleFunc("POST /api/requests", s.handleCreateRequest)
+	s.mux.HandleFunc("GET /api/requests", s.handleListRequests)
+	s.mux.HandleFunc("GET /api/requests/{id}", s.handleGetRequest)
+	s.mux.HandleFunc("PUT /api/requests/{id}/approve", requireAdmin(s.handleApproveRequest))
+	s.mux.HandleFunc("PUT /api/requests/{id}/cancel", s.handleCancelRequest)
+	s.mux.HandleFunc("PUT /api/requests/{id}/retry", requireAdmin(s.handleRetryRequest))
+	s.mux.HandleFunc("PUT /api/requests/{id}/select", requireAdmin(s.handleSelectResult))
+	s.mux.HandleFunc("DELETE /api/requests/{id}", requireAdmin(s.handleDeleteRequest))
+
+	// Notifications.
+	s.mux.HandleFunc("GET /api/notifications", s.handleGetNotifications)
+	s.mux.HandleFunc("GET /api/notifications/unread", s.handleUnreadCount)
+	s.mux.HandleFunc("PUT /api/notifications/{id}/read", s.handleMarkRead)
+	s.mux.HandleFunc("PUT /api/notifications/read-all", s.handleMarkAllRead)
+	s.mux.HandleFunc("DELETE /api/notifications/{id}", s.handleDeleteNotification)
+
 	// Sources.
 	s.mux.HandleFunc("GET /api/sources", s.handleSources)
 	s.mux.HandleFunc("GET /api/config", s.handleConfig)
@@ -178,6 +203,17 @@ func (s *Server) registerRoutes() {
 	// CSV bulk import (Feature 17).
 	s.mux.HandleFunc("POST /api/import/csv", s.handleCSVImport)
 
+	// Admin dashboard (admin only).
+	s.mux.HandleFunc("GET /api/admin/dashboard", requireAdmin(s.handleAdminDashboard))
+	s.mux.HandleFunc("GET /api/admin/activity", requireAdmin(s.handleAdminActivity))
+	s.mux.HandleFunc("POST /api/admin/bulk/retry", requireAdmin(s.handleAdminBulkRetry))
+	s.mux.HandleFunc("POST /api/admin/bulk/cancel", requireAdmin(s.handleAdminBulkCancel))
+	s.mux.HandleFunc("GET /api/admin/health", requireAdmin(s.handleAdminHealth))
+
+	// File upload.
+	s.mux.HandleFunc("POST /api/upload", s.handleUpload)
+	s.mux.HandleFunc("GET /api/uploads", s.handleListUploads)
+
 	// Torznab API.
 	torznabHandler := torznab.NewHandler(s.cfg, s.searchMgr)
 	s.mux.Handle("GET /torznab/api", torznabHandler)
@@ -214,7 +250,7 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Api-Key")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)

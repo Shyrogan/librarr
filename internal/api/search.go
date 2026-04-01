@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 )
 
@@ -14,16 +15,30 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, elapsed := s.searchMgr.Search(r.Context(), "main", query)
+	username, _ := r.Context().Value(ctxUsername).(string)
+	s.db.LogActivity(username, "search", query, fmt.Sprintf("Ebook search: %s", query))
+
+	author := r.URL.Query().Get("author")
+	results, elapsed := s.searchMgr.SearchWithAuthor(r.Context(), "main", query, author)
 	if results == nil {
 		results = nil // ensure null doesn't slip through
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"results":        results,
 		"search_time_ms": elapsed,
 		"sources":        s.searchMgr.SourceMeta(),
-	})
+	}
+
+	// Fetch metadata for the query from Open Library.
+	if s.metadataClient != nil {
+		meta, err := s.metadataClient.FetchMetadataCtx(r.Context(), query, author)
+		if err == nil && meta != nil {
+			resp["metadata"] = meta
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleSearchAudiobooks(w http.ResponseWriter, r *http.Request) {
@@ -36,13 +51,23 @@ func (s *Server) handleSearchAudiobooks(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	results, elapsed := s.searchMgr.Search(r.Context(), "audiobook", query)
+	author := r.URL.Query().Get("author")
+	results, elapsed := s.searchMgr.SearchWithAuthor(r.Context(), "audiobook", query, author)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"results":        results,
 		"search_time_ms": elapsed,
 		"sources":        s.searchMgr.SourceMeta(),
-	})
+	}
+
+	if s.metadataClient != nil {
+		meta, err := s.metadataClient.FetchMetadataCtx(r.Context(), query, author)
+		if err == nil && meta != nil {
+			resp["metadata"] = meta
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleSearchManga(w http.ResponseWriter, r *http.Request) {
@@ -55,11 +80,22 @@ func (s *Server) handleSearchManga(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, elapsed := s.searchMgr.Search(r.Context(), "manga", query)
+	author := r.URL.Query().Get("author")
+	results, elapsed := s.searchMgr.SearchWithAuthor(r.Context(), "manga", query, author)
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"results":        results,
 		"search_time_ms": elapsed,
 		"sources":        s.searchMgr.SourceMeta(),
-	})
+	}
+
+	if s.metadataClient != nil {
+		meta, err := s.metadataClient.FetchMetadataCtx(r.Context(), query, author)
+		if err == nil && meta != nil {
+			resp["metadata"] = meta
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
+

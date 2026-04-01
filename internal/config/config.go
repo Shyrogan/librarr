@@ -114,6 +114,15 @@ type Config struct {
 	OIDCAutoCreateUsers bool
 	OIDCDefaultRole     string
 
+	// Deluge
+	DelugeURL      string
+	DelugePassword string
+
+	// Transmission
+	TransmissionURL  string
+	TransmissionUser string
+	TransmissionPass string
+
 	// User Agent
 	UserAgent string
 }
@@ -208,6 +217,13 @@ func Load() *Config {
 		OIDCAutoCreateUsers: getEnvBool("OIDC_AUTO_CREATE_USERS", true),
 		OIDCDefaultRole:     getEnv("OIDC_DEFAULT_ROLE", "user"),
 
+		DelugeURL:      getEnv("DELUGE_URL", ""),
+		DelugePassword: getEnv("DELUGE_PASSWORD", ""),
+
+		TransmissionURL:  getEnv("TRANSMISSION_URL", ""),
+		TransmissionUser: getEnv("TRANSMISSION_USER", ""),
+		TransmissionPass: getEnv("TRANSMISSION_PASS", ""),
+
 		UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	}
 }
@@ -260,6 +276,16 @@ func (c *Config) HasSABnzbd() bool {
 // HasAPIKey returns true if API key auth is configured.
 func (c *Config) HasAPIKey() bool {
 	return c.APIKey != ""
+}
+
+// HasDeluge returns true if Deluge is configured.
+func (c *Config) HasDeluge() bool {
+	return c.DelugeURL != ""
+}
+
+// HasTransmission returns true if Transmission is configured.
+func (c *Config) HasTransmission() bool {
+	return c.TransmissionURL != ""
 }
 
 func getEnv(key, fallback string) string {

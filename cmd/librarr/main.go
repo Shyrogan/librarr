@@ -108,7 +108,7 @@ func main() {
 	go scanner.Start(ctx)
 
 	// Create HTTP server.
-	server := api.NewServer(cfg, database, searchMgr, downloadMgr, qb, sab)
+	server := api.NewServer(cfg, database, searchMgr, downloadMgr, qb, sab, organizer, targets)
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),

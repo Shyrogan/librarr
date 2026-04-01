@@ -23,6 +23,9 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		req.Title = "Unknown"
 	}
 
+	username, _ := r.Context().Value(ctxUsername).(string)
+	s.db.LogActivity(username, "download_start", req.Title, fmt.Sprintf("Download started from %s", req.Source))
+
 	source := s.searchMgr.GetSource(req.Source)
 
 	// Determine download type.

@@ -42,7 +42,13 @@ func NewManager(cfg *config.Config, sources []Searcher, health *HealthTracker) *
 }
 
 // Search runs a query against all enabled sources for the given tab, returning combined results.
+// Use SearchWithAuthor for scored results.
 func (m *Manager) Search(ctx context.Context, tab, query string) ([]models.SearchResult, int64) {
+	return m.SearchWithAuthor(ctx, tab, query, "")
+}
+
+// SearchWithAuthor runs a query and scores results using the provided author hint.
+func (m *Manager) SearchWithAuthor(ctx context.Context, tab, query, author string) ([]models.SearchResult, int64) {
 	start := time.Now()
 	var (
 		mu      sync.Mutex
@@ -94,6 +100,18 @@ func (m *Manager) Search(ctx context.Context, tab, query string) ([]models.Searc
 	results = FilterResults(results, query)
 	// Apply suspicious keyword, seed, size, dedup, and sorting filters.
 	results = FilterAndSortResults(results, query, m.cfg.MinTorrentSizeBytes, m.cfg.MaxTorrentSizeBytes)
+
+	// Score all results.
+	results = ScoreResults(results, query, author)
+
+	// Re-sort by score (highest first), preserving filter order as tiebreaker.
+	for i := 0; i < len(results); i++ {
+		for j := i + 1; j < len(results); j++ {
+			if results[j].Score > results[i].Score {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
+	}
 
 	elapsed := time.Since(start).Milliseconds()
 	return results, elapsed

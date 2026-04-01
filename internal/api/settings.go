@@ -105,6 +105,9 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	username, _ := r.Context().Value(ctxUsername).(string)
+	s.db.LogActivity(username, "settings_changed", "settings", "Settings updated")
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 }
 

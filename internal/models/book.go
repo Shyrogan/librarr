@@ -24,6 +24,10 @@ type SearchResult struct {
 	MediaType        string `json:"media_type,omitempty"` // ebook, audiobook, manga
 	DownloadProtocol string `json:"download_protocol,omitempty"` // "torrent" or "nzb"
 
+	// Scoring fields (populated by scorer).
+	Score          float64         `json:"score,omitempty"`
+	ScoreBreakdown *ScoreBreakdown `json:"score_breakdown,omitempty"`
+
 	// Open Library specific
 	IAIDs []string `json:"ia_ids,omitempty"`
 
@@ -36,6 +40,17 @@ type SearchResult struct {
 
 	// Download count (for Gutenberg/OL)
 	DownloadCount int `json:"download_count,omitempty"`
+}
+
+// ScoreBreakdown provides a detailed breakdown of a search result's confidence score.
+type ScoreBreakdown struct {
+	TitleMatch  float64 `json:"title_match"`
+	AuthorMatch float64 `json:"author_match"`
+	FormatScore float64 `json:"format_score"`
+	SeederScore float64 `json:"seeder_score"`
+	SizeScore   float64 `json:"size_score"`
+	Total       float64 `json:"total"`
+	Confidence  string  `json:"confidence"`
 }
 
 // StatusTransition records a job status change.
@@ -98,6 +113,30 @@ type WishlistItem struct {
 	Author    string    `json:"author"`
 	MediaType string    `json:"media_type"`
 	AddedAt   time.Time `json:"added_at"`
+}
+
+// ActivityEntry represents an entry in the enhanced activity log.
+type ActivityEntry struct {
+	ID        int64     `json:"id"`
+	User      string    `json:"user"`
+	Action    string    `json:"action"`
+	Target    string    `json:"target"`
+	Detail    string    `json:"detail"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// UploadRecord represents a tracked file upload.
+type UploadRecord struct {
+	ID           int64     `json:"id"`
+	User         string    `json:"user"`
+	Filename     string    `json:"filename"`
+	OriginalName string    `json:"original_name"`
+	FileType     string    `json:"file_type"`
+	FileSize     int64     `json:"file_size"`
+	OrganizedTo  string    `json:"organized_to"`
+	Status       string    `json:"status"`
+	Error        string    `json:"error,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // User represents a registered user.
