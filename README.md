@@ -61,10 +61,6 @@ Librarr searches 13 sources simultaneously, scores results by confidence, and au
 | Nyaa | Torrent | Manga, light novels |
 | Web Novels (7 sites) | Scraping (lncrawl) | Web novels compiled to EPUB |
 
-## Screenshots
-
-<!-- Add screenshots of the search, library, and download views here -->
-
 ## Quick Start
 
 ### Docker (recommended)
@@ -72,7 +68,7 @@ Librarr searches 13 sources simultaneously, scores results by confidence, and au
 ```yaml
 services:
   librarr:
-    build: .
+    image: ghcr.io/jeremiahm37/librarr:latest
     ports:
       - "5050:5050"
     volumes:
@@ -267,13 +263,6 @@ All configuration is via environment variables. Every variable has a sensible de
 | POST | `/api/totp/verify` | Verify and enable TOTP |
 | POST | `/api/totp/disable` | Disable TOTP |
 | GET | `/api/totp/status` | Check if TOTP is enabled |
-
-### OIDC / SSO
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/auth/oidc/login` | Initiate OIDC login flow |
-| GET | `/auth/oidc/callback` | OIDC callback handler |
 
 ### Search
 
