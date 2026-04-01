@@ -1,18 +1,31 @@
 # Librarr
 
-Self-hosted book, audiobook, and manga search and download manager.
+**The missing *arr for books.** Self-hosted book, audiobook, and manga search and download manager — like Sonarr/Radarr but for your reading library.
 
-Librarr aggregates 13 search sources into a single interface, handles downloads via qBittorrent or SABnzbd, and automatically organizes files into your Calibre, Audiobookshelf, Kavita, or Komga libraries. It exposes a Torznab/Newznab API so it can act as an indexer in Prowlarr or Readarr, and an OPDS 1.2 feed for e-readers.
+Librarr searches 13 sources simultaneously, scores results by confidence, and auto-imports into your Calibre, Audiobookshelf, Kavita, or Komga library. Single 17MB Go binary. No runtime dependencies.
 
+### Highlights
+
+- **Import your Goodreads/StoryGraph "to-read" list** via CSV and bulk-download everything
+- **Request workflow** — users request books, admins approve, downloads happen automatically (like Jellyseerr for books)
+- **Book metadata enrichment** — covers, descriptions, series info, and ISBN from Open Library
+- **Torznab API** — add Librarr as an indexer in Prowlarr or Readarr (it works both ways)
+- **13 search sources** — Anna's Archive, AudioBookBay, MangaDex, Nyaa, Open Library, Gutenberg, and more
+- **OPDS 1.2 feed** — browse your library from any e-reader
 
 ## Features
 
 - **13 search sources** in one UI (see table below)
+- **Search result scoring** — 0-100 confidence with breakdown (title match, author, format, seeders, size)
+- **Request/approval system** — users request → admin approves → auto-search + download + notification
+- **In-app notifications** — persistent alerts when downloads complete or fail
+- **Admin dashboard** — library stats, source health, activity log, bulk operations
+- **File uploads** — drag and drop ebooks/audiobooks, auto-organize + library scan
+- **4 download clients** — qBittorrent, SABnzbd, Deluge, Transmission with priority ordering
 - **Torznab/Newznab API** -- add Librarr as an indexer in Prowlarr, Readarr, or any Torznab-compatible app
 - **OPDS 1.2 feed** -- browse and download books from any e-reader or OPDS client
-- **Dual download clients** -- qBittorrent (torrents) and SABnzbd (Usenet/NZB) with configurable priority
-- **Post-download pipeline** -- organize files, import into Calibre/Audiobookshelf/Kavita/Komga, track in SQLite
-- **Torrent completion watcher** -- background goroutine polls qBittorrent, auto-imports completed downloads
+- **Post-download pipeline** -- organize files by author/title, import into Calibre/Audiobookshelf/Kavita/Komga
+- **Open Library metadata** — covers, descriptions, series, ISBN, publication year fetched automatically
 - **EPUB verification** -- checks title word overlap to detect wrong-book downloads
 - **Multi-user auth** -- session login with bcrypt passwords, TOTP 2FA, admin/user roles
 - **OIDC / SSO** -- OpenID Connect support for Authelia, Keycloak, Authentik, etc.
