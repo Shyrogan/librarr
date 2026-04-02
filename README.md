@@ -3,7 +3,7 @@
 [![Build & Test](https://github.com/JeremiahM37/librarr/actions/workflows/test.yml/badge.svg)](https://github.com/JeremiahM37/librarr/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/JeremiahM37/librarr?include_prereleases)](https://github.com/JeremiahM37/librarr/releases)
 [![Go Report Card](https://goreportcard.com/badge/github.com/JeremiahM37/librarr)](https://goreportcard.com/report/github.com/JeremiahM37/librarr)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **The missing *arr for books.** Self-hosted book, audiobook, and manga search and download manager — like Sonarr/Radarr but for your reading library.
 
