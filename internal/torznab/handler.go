@@ -2,6 +2,7 @@ package torznab
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/xml"
 	"fmt"
 	"log/slog"
@@ -28,7 +29,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Validate API key if configured.
 	if h.cfg.TorznabAPIKey != "" {
 		apikey := r.URL.Query().Get("apikey")
-		if apikey != h.cfg.TorznabAPIKey {
+		if subtle.ConstantTimeCompare([]byte(apikey), []byte(h.cfg.TorznabAPIKey)) != 1 {
 			h.writeError(w, "100", "Invalid API Key", http.StatusUnauthorized)
 			return
 		}

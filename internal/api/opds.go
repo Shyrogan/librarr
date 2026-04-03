@@ -238,12 +238,40 @@ func (s *Server) handleOPDSDownload(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "File not found on disk", http.StatusNotFound)
 				return
 			}
-			if _, err := os.Stat(item.FilePath); os.IsNotExist(err) {
+
+			// Resolve the real path to prevent path traversal via symlinks or DB tampering.
+			realPath, err := filepath.EvalSymlinks(item.FilePath)
+			if err != nil {
 				http.Error(w, "File not found on disk", http.StatusNotFound)
 				return
 			}
 
-			fmtStr := strings.ToLower(strings.TrimPrefix(filepath.Ext(item.FilePath), "."))
+			// Validate the file is within an allowed directory.
+			allowed := false
+			for _, dir := range []string{s.cfg.EbookDir, s.cfg.AudiobookDir, s.cfg.MangaDir, s.cfg.IncomingDir, s.cfg.MangaIncomingDir} {
+				if dir == "" {
+					continue
+				}
+				absDir, err := filepath.Abs(dir)
+				if err != nil {
+					continue
+				}
+				if strings.HasPrefix(realPath, absDir+string(filepath.Separator)) || realPath == absDir {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				http.Error(w, "Access denied", http.StatusForbidden)
+				return
+			}
+
+			if _, err := os.Stat(realPath); os.IsNotExist(err) {
+				http.Error(w, "File not found on disk", http.StatusNotFound)
+				return
+			}
+
+			fmtStr := strings.ToLower(strings.TrimPrefix(filepath.Ext(realPath), "."))
 			mime := formatMIMEs[fmtStr]
 			if mime == "" {
 				mime = "application/octet-stream"
@@ -251,8 +279,8 @@ func (s *Server) handleOPDSDownload(w http.ResponseWriter, r *http.Request) {
 
 			w.Header().Set("Content-Type", mime)
 			w.Header().Set("Content-Disposition",
-				fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(item.FilePath)))
-			http.ServeFile(w, r, item.FilePath)
+				fmt.Sprintf("attachment; filename=%q", filepath.Base(realPath)))
+			http.ServeFile(w, r, realPath)
 			return
 		}
 	}

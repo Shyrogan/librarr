@@ -49,7 +49,7 @@ func (d *DirectDownloader) DownloadFromAnnas(md5, title string, progressFn func(
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024)) // 2MB max for HTML pages
 	if resp.StatusCode != 200 {
 		return "", 0, fmt.Errorf("libgen ads page HTTP %d", resp.StatusCode)
 	}
@@ -103,7 +103,7 @@ func (d *DirectDownloader) downloadFile(fileURL, title string, progressFn func(s
 	// If we got an HTML response, try to find the actual download link.
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "text/html") {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024)) // 2MB max for HTML
 		bodyStr := string(body)
 
 		if strings.Contains(bodyStr, "File not found") || strings.Contains(bodyStr, "Error</h1>") {
@@ -218,7 +218,7 @@ func (d *DirectDownloader) tryAltMD5(title, originalMD5 string, progressFn func(
 		if err != nil {
 			continue
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 		resp.Body.Close()
 
 		if resp.StatusCode != 200 {
@@ -264,7 +264,7 @@ func (a *annasSearchHelper) searchForTitle(ctx context.Context, title string) ([
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	md5Re := regexp.MustCompile(`/md5/([a-f0-9]+)`)
 	matches := md5Re.FindAllStringSubmatch(string(body), -1)
 

@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func (s *Server) handleCSVImport(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +95,7 @@ func (s *Server) handleCSVImport(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Search all sources and queue best result.
+		// Use background context since the goroutine outlives the HTTP request.
 		go func(title, author, mediaType string) {
 			tab := "main"
 			if mediaType == "audiobook" {
@@ -106,7 +109,9 @@ func (s *Server) handleCSVImport(w http.ResponseWriter, r *http.Request) {
 				query = title + " " + author
 			}
 
-			results, _ := s.searchMgr.Search(r.Context(), tab, query)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			results, _ := s.searchMgr.Search(ctx, tab, query)
 			if len(results) == 0 {
 				slog.Warn("CSV import: no results", "title", title)
 				return

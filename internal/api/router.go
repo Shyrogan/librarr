@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/JeremiahM37/librarr/internal/config"
@@ -79,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	handler = authMiddleware(s.cfg, s.db, s.sessions, handler)
 	handler = RateLimitMiddleware(s.rateLimiter, handler)
 	handler = s.corsMiddleware(handler)
+	handler = s.securityHeadersMiddleware(handler)
+	handler = s.requestSizeLimitMiddleware(handler)
 	handler = s.logMiddleware(handler)
 	return handler
 }
@@ -171,16 +174,16 @@ func (s *Server) registerRoutes() {
 	// Duplicate check.
 	s.mux.HandleFunc("GET /api/check-duplicate", s.handleCheckDuplicate)
 
-	// Settings (admin only in multi-user mode — middleware checks in handler).
-	s.mux.HandleFunc("GET /api/settings", s.handleGetSettings)
-	s.mux.HandleFunc("POST /api/settings", s.handleSaveSettings)
+	// Settings (admin only).
+	s.mux.HandleFunc("GET /api/settings", requireAdmin(s.handleGetSettings))
+	s.mux.HandleFunc("POST /api/settings", requireAdmin(s.handleSaveSettings))
 
-	// Connection tests (Feature 13).
-	s.mux.HandleFunc("POST /api/test/prowlarr", s.handleTestProwlarr)
-	s.mux.HandleFunc("POST /api/test/qbittorrent", s.handleTestQBittorrent)
-	s.mux.HandleFunc("POST /api/test/audiobookshelf", s.handleTestAudiobookshelf)
-	s.mux.HandleFunc("POST /api/test/kavita", s.handleTestKavita)
-	s.mux.HandleFunc("POST /api/test/sabnzbd", s.handleTestSABnzbd)
+	// Connection tests (admin only — SSRF risk).
+	s.mux.HandleFunc("POST /api/test/prowlarr", requireAdmin(s.handleTestProwlarr))
+	s.mux.HandleFunc("POST /api/test/qbittorrent", requireAdmin(s.handleTestQBittorrent))
+	s.mux.HandleFunc("POST /api/test/audiobookshelf", requireAdmin(s.handleTestAudiobookshelf))
+	s.mux.HandleFunc("POST /api/test/kavita", requireAdmin(s.handleTestKavita))
+	s.mux.HandleFunc("POST /api/test/sabnzbd", requireAdmin(s.handleTestSABnzbd))
 
 	// External URLs stub.
 	s.mux.HandleFunc("GET /api/external-urls", func(w http.ResponseWriter, _ *http.Request) {
@@ -200,8 +203,8 @@ func (s *Server) registerRoutes() {
 		s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 	}
 
-	// CSV bulk import (Feature 17).
-	s.mux.HandleFunc("POST /api/import/csv", s.handleCSVImport)
+	// CSV bulk import (admin only — triggers downloads).
+	s.mux.HandleFunc("POST /api/import/csv", requireAdmin(s.handleCSVImport))
 
 	// Admin dashboard (admin only).
 	s.mux.HandleFunc("GET /api/admin/dashboard", requireAdmin(s.handleAdminDashboard))
@@ -232,6 +235,29 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 }
 
+// requestSizeLimitMiddleware caps non-multipart request bodies at 1MB to prevent OOM.
+// Multipart uploads have their own size limits set in their handlers.
+func (s *Server) requestSizeLimitMiddleware(next http.Handler) http.Handler {
+	const maxBodySize = 1 << 20 // 1MB
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contentType := r.Header.Get("Content-Type")
+		if r.Body != nil && !strings.HasPrefix(contentType, "multipart/") {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) logMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -249,9 +275,24 @@ func (s *Server) logMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			// Reflect the request origin only if it matches the Host header
+			// (same-origin) or is empty. This prevents cross-origin credential theft
+			// while still allowing same-origin requests from the web UI.
+			host := r.Host
+			if strings.Contains(origin, host) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+			// For API-key-only requests (no cookies), allow any origin.
+			if r.Header.Get("X-Api-Key") != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			}
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Api-Key")
+		w.Header().Set("Vary", "Origin")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return

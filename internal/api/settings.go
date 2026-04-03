@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 const maskedValue = "--------"
@@ -121,6 +123,32 @@ func (s *Server) loadSettings() map[string]interface{} {
 	return settings
 }
 
+// validateTestURL checks that a URL provided for connection testing is safe
+// (not targeting internal metadata services, localhost, etc.).
+func validateTestURL(rawURL string) error {
+	if rawURL == "" {
+		return fmt.Errorf("URL is required")
+	}
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	lower := strings.ToLower(rawURL)
+	// Block cloud metadata endpoints and link-local addresses.
+	blockedPrefixes := []string{
+		"http://169.254.",
+		"http://[fd",
+		"http://[fe80:",
+		"http://metadata.",
+		"http://metadata",
+	}
+	for _, prefix := range blockedPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return fmt.Errorf("URL targets a restricted address")
+		}
+	}
+	return nil
+}
+
 // handleTestProwlarr actually tests the Prowlarr API connection.
 func (s *Server) handleTestProwlarr(w http.ResponseWriter, r *http.Request) {
 	var data struct {
@@ -129,29 +157,37 @@ func (s *Server) handleTestProwlarr(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&data)
 
-	url := strings.TrimRight(data.URL, "/")
+	testURL := strings.TrimRight(data.URL, "/")
 	apiKey := data.APIKey
-	if url == "" {
-		url = s.cfg.ProwlarrURL
+	if testURL == "" {
+		testURL = s.cfg.ProwlarrURL
 	}
 	if apiKey == "" || apiKey == maskedValue {
 		apiKey = s.cfg.ProwlarrAPIKey
 	}
 
-	if url == "" || apiKey == "" {
+	if testURL == "" || apiKey == "" {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"success": false, "error": "Prowlarr URL and API key required",
 		})
 		return
 	}
 
-	req, _ := http.NewRequest("GET", url+"/api/v1/health", nil)
+	if err := validateTestURL(testURL); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success": false, "error": err.Error(),
+		})
+		return
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", testURL+"/api/v1/health", nil)
 	req.Header.Set("X-Api-Key", apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"success": false, "error": err.Error(),
+			"success": false, "error": "Connection failed",
 		})
 		return
 	}
@@ -178,13 +214,14 @@ func (s *Server) handleTestAudiobookshelf(w http.ResponseWriter, _ *http.Request
 		return
 	}
 
+	client := &http.Client{Timeout: 10 * time.Second}
 	req, _ := http.NewRequest("GET", s.cfg.ABSURL+"/api/libraries", nil)
 	req.Header.Set("Authorization", "Bearer "+s.cfg.ABSToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"success": false, "error": err.Error(),
+			"success": false, "error": "Connection failed",
 		})
 		return
 	}
@@ -210,14 +247,15 @@ func (s *Server) handleTestKavita(w http.ResponseWriter, _ *http.Request) {
 		"password": s.cfg.KavitaPass,
 	})
 
-	resp, err := http.DefaultClient.Post(
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(
 		s.cfg.KavitaURL+"/api/Account/login",
 		"application/json",
 		strings.NewReader(string(payload)),
 	)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"success": false, "error": err.Error(),
+			"success": false, "error": "Connection failed",
 		})
 		return
 	}

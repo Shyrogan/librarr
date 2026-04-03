@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -51,10 +51,32 @@ type SessionStore struct {
 
 // NewSessionStore creates a new session store.
 func NewSessionStore() *SessionStore {
-	return &SessionStore{
+	s := &SessionStore{
 		sessions:    make(map[string]*SessionData),
 		pendingTOTP: make(map[string]*PendingTOTP),
 	}
+
+	// Periodically clean up expired sessions and pending TOTP tokens.
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		for range ticker.C {
+			now := time.Now()
+			s.mu.Lock()
+			for token, data := range s.sessions {
+				if now.After(data.Expiry) {
+					delete(s.sessions, token)
+				}
+			}
+			for token, pending := range s.pendingTOTP {
+				if now.After(pending.Expiry) {
+					delete(s.pendingTOTP, token)
+				}
+			}
+			s.mu.Unlock()
+		}
+	}()
+
+	return s
 }
 
 // Create generates a new session token for a user, valid for 24 hours.
@@ -204,7 +226,7 @@ func authMiddleware(cfg *config.Config, database *db.DB, sessions *SessionStore,
 			if apiKey == "" {
 				apiKey = r.URL.Query().Get("apikey")
 			}
-			if apiKey == cfg.APIKey {
+			if subtle.ConstantTimeCompare([]byte(apiKey), []byte(cfg.APIKey)) == 1 {
 				// API key users get admin-level access.
 				ctx := context.WithValue(r.Context(), ctxUserRole, "admin")
 				ctx = context.WithValue(ctx, ctxUsername, "api")
@@ -490,10 +512,17 @@ func handleRegister(database *db.DB, sessions *SessionStore) http.HandlerFunc {
 			return
 		}
 
-		if len(req.Username) < 3 || len(req.Password) < 6 {
+		if len(req.Username) < 3 || len(req.Username) > 64 {
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 				"success": false,
-				"error":   "Username must be at least 3 characters, password at least 6",
+				"error":   "Username must be 3-64 characters",
+			})
+			return
+		}
+		if len(req.Password) < 6 || len(req.Password) > 72 {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"success": false,
+				"error":   "Password must be 6-72 characters",
 			})
 			return
 		}
@@ -737,9 +766,10 @@ func handleDeleteUser(database *db.DB) http.HandlerFunc {
 		}
 
 		if err := database.DeleteUser(id); err != nil {
+			slog.Error("failed to delete user", "id", id, "error", err)
 			writeJSON(w, http.StatusNotFound, map[string]interface{}{
 				"success": false,
-				"error":   fmt.Sprintf("Failed to delete user: %s", err.Error()),
+				"error":   "Failed to delete user",
 			})
 			return
 		}

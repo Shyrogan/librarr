@@ -133,12 +133,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	s.db.LogActivity(username, "upload", header.Filename, fmt.Sprintf("Uploaded %s (%s, %d bytes)", header.Filename, mediaType, written))
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success":      orgErr == nil,
-		"filename":     header.Filename,
-		"type":         mediaType,
-		"size":         written,
-		"organized_to": organizedPath,
-		"error":        errMsg,
+		"success":  orgErr == nil,
+		"filename": filepath.Base(header.Filename),
+		"type":     mediaType,
+		"size":     written,
+		"error":    errMsg,
 	})
 }
 

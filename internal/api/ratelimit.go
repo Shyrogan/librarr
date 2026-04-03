@@ -27,10 +27,33 @@ type rateLimitBucket struct {
 
 // NewRateLimiter creates a rate limiter with the given window and rules.
 func NewRateLimiter(windowSec int, rules map[string]int) *RateLimiter {
-	return &RateLimiter{
+	rl := &RateLimiter{
 		windowSec: windowSec,
 		rules:     rules,
 		buckets:   make(map[rateLimitKey]*rateLimitBucket),
+	}
+	// Periodically clean up stale buckets to prevent unbounded memory growth.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			rl.cleanup()
+		}
+	}()
+	return rl
+}
+
+// cleanup removes expired buckets.
+func (rl *RateLimiter) cleanup() {
+	now := time.Now()
+	cutoff := now.Add(-time.Duration(rl.windowSec) * time.Second)
+
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	for key, bucket := range rl.buckets {
+		if len(bucket.timestamps) == 0 || bucket.timestamps[len(bucket.timestamps)-1].Before(cutoff) {
+			delete(rl.buckets, key)
+		}
 	}
 }
 
@@ -116,9 +139,14 @@ func RateLimitMiddleware(rl *RateLimiter, next http.Handler) http.Handler {
 			return
 		}
 
-		identity := r.Header.Get("X-Forwarded-For")
-		if identity == "" {
-			identity = r.RemoteAddr
+		// Use RemoteAddr as primary identity. X-Forwarded-For is trivially
+		// spoofable unless behind a trusted reverse proxy. If behind a proxy,
+		// take only the rightmost (last hop before our server) IP from XFF.
+		identity := r.RemoteAddr
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			// Use the last entry (closest proxy hop) -- less spoofable than first.
+			identity = strings.TrimSpace(parts[len(parts)-1])
 		}
 
 		allowed, retryAfter, rule, limit := rl.Check(identity, r.URL.Path)

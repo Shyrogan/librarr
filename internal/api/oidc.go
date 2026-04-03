@@ -63,7 +63,7 @@ func NewOIDCHandler(cfg *config.Config, database *db.DB, sessions *SessionStore)
 
 	slog.Info("OIDC provider initialized", "issuer", cfg.OIDCIssuer, "provider_name", cfg.OIDCProviderName)
 
-	return &OIDCHandler{
+	h := &OIDCHandler{
 		cfg:      cfg,
 		db:       database,
 		sessions: sessions,
@@ -72,6 +72,23 @@ func NewOIDCHandler(cfg *config.Config, database *db.DB, sessions *SessionStore)
 		oauth2:   oauth2Cfg,
 		states:   make(map[string]time.Time),
 	}
+
+	// Periodically clean up expired OIDC state nonces.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			h.mu.Lock()
+			now := time.Now()
+			for state, expiry := range h.states {
+				if now.After(expiry) {
+					delete(h.states, state)
+				}
+			}
+			h.mu.Unlock()
+		}
+	}()
+
+	return h
 }
 
 // generateState creates a random state string for CSRF protection.

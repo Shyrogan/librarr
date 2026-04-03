@@ -236,16 +236,18 @@ func (s *Server) handleAdminBulkCancel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminHealth(w http.ResponseWriter, _ *http.Request) {
 	checks := make([]map[string]interface{}, 0)
 
+	healthClient := &http.Client{Timeout: 10 * time.Second}
+
 	// Prowlarr.
 	if s.cfg.HasProwlarr() {
 		status := "ok"
 		detail := ""
 		req, _ := http.NewRequest("GET", s.cfg.ProwlarrURL+"/api/v1/health", nil)
 		req.Header.Set("X-Api-Key", s.cfg.ProwlarrAPIKey)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := healthClient.Do(req)
 		if err != nil {
 			status = "error"
-			detail = err.Error()
+			detail = "Connection failed"
 		} else {
 			resp.Body.Close()
 			if resp.StatusCode != 200 {
@@ -302,10 +304,10 @@ func (s *Server) handleAdminHealth(w http.ResponseWriter, _ *http.Request) {
 		detail := ""
 		req, _ := http.NewRequest("GET", s.cfg.ABSURL+"/api/libraries", nil)
 		req.Header.Set("Authorization", "Bearer "+s.cfg.ABSToken)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := healthClient.Do(req)
 		if err != nil {
 			status = "error"
-			detail = err.Error()
+			detail = "Connection failed"
 		} else {
 			resp.Body.Close()
 			if resp.StatusCode != 200 {
@@ -324,10 +326,10 @@ func (s *Server) handleAdminHealth(w http.ResponseWriter, _ *http.Request) {
 	if s.cfg.HasKavita() {
 		status := "ok"
 		detail := ""
-		resp, err := http.Get(s.cfg.KavitaURL + "/api/health")
+		resp, err := healthClient.Get(s.cfg.KavitaURL + "/api/health")
 		if err != nil {
 			status = "error"
-			detail = err.Error()
+			detail = "Connection failed"
 		} else {
 			resp.Body.Close()
 			if resp.StatusCode != 200 {
@@ -346,10 +348,10 @@ func (s *Server) handleAdminHealth(w http.ResponseWriter, _ *http.Request) {
 	if s.cfg.HasCalibre() && s.cfg.CalibreURL != "" {
 		status := "ok"
 		detail := ""
-		resp, err := http.Get(s.cfg.CalibreURL)
+		resp, err := healthClient.Get(s.cfg.CalibreURL)
 		if err != nil {
 			status = "error"
-			detail = err.Error()
+			detail = "Connection failed"
 		} else {
 			resp.Body.Close()
 			if resp.StatusCode >= 400 {
