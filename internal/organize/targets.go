@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/JeremiahM37/librarr/internal/config"
@@ -32,7 +33,7 @@ func NewLibraryTargets(cfg *config.Config) *LibraryTargets {
 
 // ImportEbook copies to Calibre library and triggers scans on ABS and Kavita.
 func (lt *LibraryTargets) ImportEbook(filePath, title, author string) {
-	lt.copyToCalibre(filePath, title, author)
+	lt.addToCalibre(filePath, title, author)
 	lt.copyToKavitaEbook(filePath, title, author)
 	lt.scanABSEbookLibrary()
 }
@@ -42,35 +43,158 @@ func (lt *LibraryTargets) ImportAudiobook() {
 	lt.scanABSAudiobookLibrary()
 }
 
-// ImportManga copies to Kavita and Komga manga libraries and triggers scans.
+// ImportManga copies to Calibre, Kavita and Komga manga libraries and triggers scans.
 func (lt *LibraryTargets) ImportManga(filePath, seriesTitle string) {
+	lt.addToCalibre(filePath, seriesTitle, "")
 	lt.copyToKavitaManga(filePath, seriesTitle)
 	lt.scanKavita()
 	lt.copyToKomga(filePath, seriesTitle)
 	lt.scanKomga()
 }
 
-// copyToCalibre copies an ebook to the Calibre library directory.
-func (lt *LibraryTargets) copyToCalibre(filePath, title, author string) {
-	if !lt.cfg.HasCalibre() {
-		return
-	}
-	if author == "" {
-		author = "Unknown"
-	}
-
-	destDir := filepath.Join(lt.cfg.CalibreLibraryPath, sanitizePath(author, 80), sanitizePath(title, 80))
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		slog.Error("create calibre dir failed", "error", err)
+// addToCalibre imports a file into the Calibre library via the content server API.
+// For .cbz/.cbr files, it parses ComicInfo.xml to extract metadata (series, volume, authors)
+// and sets it on the book after adding.
+func (lt *LibraryTargets) addToCalibre(filePath, title, author string) {
+	if lt.cfg.CalibreURL == "" {
 		return
 	}
 
-	destPath := filepath.Join(destDir, filepath.Base(filePath))
-	if err := copyFile(filePath, destPath); err != nil {
-		slog.Error("copy to calibre failed", "error", err)
+	filename := filepath.Base(filePath)
+
+	// Read the file
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		slog.Error("read file for calibre import failed", "file", filePath, "error", err)
 		return
 	}
-	slog.Info("copied to calibre library", "path", destPath)
+
+	// Add book via content server API
+	addURL := fmt.Sprintf("%s/cdb/add-book/0/y/%s", lt.cfg.CalibreURL, filename)
+	resp, err := http.Post(addURL, "application/octet-stream", bytes.NewReader(data))
+	if err != nil {
+		slog.Error("calibre add-book request failed", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("calibre add-book failed", "status", resp.StatusCode, "body", string(body))
+		return
+	}
+
+	var addResp struct {
+		BookID int    `json:"book_id"`
+		Title  string `json:"title"`
+	}
+	if err := json.Unmarshal(body, &addResp); err != nil || addResp.BookID == 0 {
+		slog.Warn("calibre add-book: could not parse book_id", "body", string(body))
+		return
+	}
+
+	slog.Info("added to calibre library", "file", filename, "book_id", addResp.BookID)
+
+	// For comics, extract ComicInfo.xml metadata and set fields
+	ext := filepath.Ext(filePath)
+	if ext == ".cbz" || ext == ".cbr" {
+		meta := parseComicInfo(filePath)
+		if meta != nil {
+			lt.setCalibreFields(addResp.BookID, meta)
+		}
+	}
+}
+
+func (lt *LibraryTargets) setCalibreFields(bookID int, ci *comicInfo) {
+	changes := map[string]interface{}{}
+
+	if ci.Series != "" {
+		changes["series"] = ci.Series
+	}
+	if ci.Number != "" {
+		changes["series_index"] = ci.Number
+	}
+	if ci.Title != "" {
+		changes["title"] = ci.Title
+	}
+	if ci.Publisher != "" {
+		changes["publisher"] = ci.Publisher
+	}
+	if ci.Genre != "" {
+		changes["tags"] = ci.Genre
+	}
+	if ci.Summary != "" {
+		changes["comments"] = ci.Summary
+	}
+	if ci.Year != "" {
+		changes["pubdate"] = ci.Year + "-01-01"
+	}
+	if ci.LanguageISO != "" {
+		changes["languages"] = []string{ci.LanguageISO}
+	}
+
+	// Build authors from credits
+	var authors []string
+	if ci.Writer != "" {
+		for _, a := range strings.Split(ci.Writer, ",") {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				authors = append(authors, a)
+			}
+		}
+	}
+	if ci.Colorist != "" {
+		for _, a := range strings.Split(ci.Colorist, ",") {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				authors = append(authors, a)
+			}
+		}
+	}
+	if len(authors) == 0 && ci.CoverArtist != "" {
+		for _, a := range strings.Split(ci.CoverArtist, ",") {
+			a = strings.TrimSpace(a)
+			if a != "" {
+				authors = append(authors, a)
+			}
+		}
+	}
+	if len(authors) > 0 {
+		changes["authors"] = authors
+	}
+
+	if len(changes) == 0 {
+		return
+	}
+
+	payload := map[string]interface{}{
+		"changes":       changes,
+		"loaded_book_ids": []int{},
+	}
+	data, _ := json.Marshal(payload)
+
+	setURL := fmt.Sprintf("%s/cdb/set-fields/%d", lt.cfg.CalibreURL, bookID)
+	req, err := http.NewRequest(http.MethodPost, setURL, bytes.NewReader(data))
+	if err != nil {
+		slog.Warn("calibre set-fields request failed", "error", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.Warn("calibre set-fields request failed", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		slog.Warn("calibre set-fields failed", "status", resp.StatusCode, "body", string(body))
+		return
+	}
+
+	slog.Info("set calibre fields", "book_id", bookID)
 }
 
 // copyToKavitaEbook copies an ebook to the Kavita ebook library.

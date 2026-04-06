@@ -9,6 +9,8 @@
 
 Librarr searches 13 sources simultaneously, scores results by confidence, and auto-imports into your Calibre, Audiobookshelf, Kavita, or Komga library. Single 17MB Go binary. No runtime dependencies.
 
+This project is a fork that actually simply imports manga on calibre, WIP
+
 ### Highlights
 
 - **Import your Goodreads/StoryGraph "to-read" list** via CSV and bulk-download everything

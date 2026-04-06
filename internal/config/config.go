@@ -55,6 +55,7 @@ type Config struct {
 	// Library Import Targets
 	CalibreLibraryPath      string
 	CalibreURL              string
+	CalibreDBPath           string
 	KavitaURL               string
 	KavitaUser              string
 	KavitaPass              string
